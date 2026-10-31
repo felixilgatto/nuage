@@ -1,0 +1,28 @@
+# Milestone 1 proof of concept: rclone inside the Flatpak sandbox mounts through
+# the host's fusermount3. Throwaway; the real manifest lives in build-aux/flatpak/.
+app-id: io.github.felixilgatto.NuagePoc
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: rclone
+finish-args:
+  - --share=network
+  - --talk-name=org.freedesktop.Flatpak # fusermount3 wrapper only
+  - --filesystem=home                   # mount points chosen freely under $HOME
+modules:
+  - name: rclone
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 rclone /app/bin/rclone
+    sources:
+      - type: archive
+        url: https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip
+        sha256: 349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
+
+  - name: fusermount-wrapper
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 fusermount-wrapper.sh /app/bin/fusermount3
+    sources:
+      - type: file
+        path: fusermount-wrapper.sh
