@@ -1,0 +1,27 @@
+[package]
+name = "nuage-engine"
+description = "Nuage engine: accounts, mounts, uploads, exclusions, status aggregation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = ["local", "gdrive"]
+local = ["nuage-providers/local"]
+gdrive = ["nuage-providers/gdrive"]
+
+[dependencies]
+nuage-core.workspace = true
+nuage-providers.workspace = true
+nuage-rclone.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

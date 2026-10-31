@@ -1,0 +1,11 @@
+# Cargo
+/target/
+
+# Cargo home used when building inside the GNOME SDK (see README)
+/.flatpak-cargo/
+
+# flatpak-builder
+.flatpak-builder/
+/build-dir/
+/repo/
+*.flatpak

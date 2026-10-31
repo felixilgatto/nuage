@@ -1,0 +1,72 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# The GTK crates (`ui`, `gtk`) need libgtk-4 / libadwaita development files.
+# They are left out of the default members so that `cargo build` and
+# `cargo test` work on a headless machine; use `--workspace` to include them.
+default-members = [
+    "crates/core",
+    "crates/ipc",
+    "crates/rclone-rc",
+    "crates/providers",
+    "crates/engine",
+    "crates/fs",
+    "crates/daemon",
+    "crates/cli",
+    "crates/tray",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Nuage contributors"]
+repository = "https://github.com/felixilgatto/nuage"
+homepage = "https://github.com/felixilgatto/nuage"
+publish = false
+
+[workspace.dependencies]
+# Project crates
+nuage-core = { path = "crates/core" }
+nuage-ipc = { path = "crates/ipc" }
+nuage-rclone = { path = "crates/rclone-rc" }
+nuage-providers = { path = "crates/providers", default-features = false }
+nuage-engine = { path = "crates/engine" }
+nuage-tray = { path = "crates/tray" }
+nuage-ui = { path = "crates/ui" }
+
+# Third-party crates
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+# TLS through rustls with the `ring` provider (aws-lc-rs, reqwest's default
+# provider, carries the OpenSSL license, which is not on our allow-list).
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "time", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+
+# GTK / desktop only. Never pulled by `nuaged` or `nuage` (checked by scripts/check-deps.sh).
+gtk = { package = "gtk4", version = "0.11" }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
+async-channel = "2"
+ksni = "0.3"
+gettext-rs = { version = "0.8", features = ["gettext-system"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+strip = true

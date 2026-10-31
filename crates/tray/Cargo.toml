@@ -1,0 +1,17 @@
+[package]
+name = "nuage-tray"
+description = "Nuage system tray icon (StatusNotifierItem)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ksni.workspace = true
+nuage-core.workspace = true
+
+[lints]
+workspace = true
