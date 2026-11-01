@@ -12,3 +12,6 @@
 
 # Milestone 4 Flatpak check (poc/flatpak-fuse)
 m4-stage/
+
+# Claude Code: local worktrees (skills in .claude/skills are tracked)
+/.claude/worktrees/

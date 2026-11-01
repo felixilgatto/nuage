@@ -45,6 +45,7 @@ assets = [
     ["../../build-aux/native/nuaged.service", "usr/lib/systemd/user/", "644"],
     ["../../README.md", "usr/share/doc/nuage/", "644"],
     ["../../docs/SERVER.md", "usr/share/doc/nuage/", "644"],
+    ["../../docs/PROVIDERS.md", "usr/share/doc/nuage/", "644"],
     ["../../docs/GOOGLE_OAUTH.md", "usr/share/doc/nuage/", "644"],
     ["../../docs/CLI.md", "usr/share/doc/nuage/", "644"],
     ["../../docs/TROUBLESHOOTING.md", "usr/share/doc/nuage/", "644"],

@@ -1,7 +1,5 @@
-//! Google Drive provider ("My Drive" only in v1).
-//!
-//! **Declarative stub**: the values below follow the project brief; the
-//! OAuth flows are completed in milestone 4.
+//! Google Drive provider ("My Drive" only in v1). User documentation:
+//! docs/PROVIDERS.md and docs/GOOGLE_OAUTH.md.
 
 use nuage_core::{
     AuthSpec, Capabilities, CustomClient, GuideStep, NativeDocPolicy, SetupInput, VfsOptions,

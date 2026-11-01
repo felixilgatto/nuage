@@ -18,7 +18,8 @@ Files, work on your documents as usual: Nuage keeps them in sync.
 - Leave some folders out of sync.
 - Works on servers too, from the command line.
 
-Providers: **Google Drive** today; OneDrive and others later.
+Providers: **Google Drive** today; OneDrive and others later
+([details](docs/PROVIDERS.md)).
 
 ## Install
 
@@ -58,10 +59,12 @@ All commands: [docs/CLI.md](docs/CLI.md).
 
 ## Help
 
+- [Providers](docs/PROVIDERS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Nuage on a server](docs/SERVER.md)
 - [Command line](docs/CLI.md)
 - [Building and contributing](docs/BUILDING.md)
+- [Adding a provider](docs/ADDING_A_PROVIDER.md)
 - [Architecture](docs/ARCHITECTURE.md)
 
 ## Flatpak permissions
