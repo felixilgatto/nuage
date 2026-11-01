@@ -1426,6 +1426,7 @@ dependencies = [
 name = "nuage-engine"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "nuage-core",
  "nuage-fs",
  "nuage-providers",
@@ -1445,6 +1446,7 @@ version = "0.1.0"
 dependencies = [
  "fuser",
  "libc",
+ "nuage-core",
  "rustix",
  "tempfile",
  "tracing",

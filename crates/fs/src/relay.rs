@@ -19,6 +19,8 @@ use fuser::{
     Request, TimeOrNow, WriteFlags,
 };
 
+use nuage_core::ExclusionSet;
+
 use crate::gate::Gate;
 use crate::inodes::{Inodes, ROOT};
 
@@ -91,6 +93,9 @@ struct DirItem {
 #[derive(Debug)]
 pub struct RelayFs {
     backing: PathBuf,
+    /// Where excluded items created locally are kept (`local-only`).
+    local: Option<PathBuf>,
+    exclusions: Arc<RwLock<ExclusionSet>>,
     inodes: Mutex<Inodes>,
     handles: Mutex<HashMap<u64, Arc<Handle>>>,
     next_fh: AtomicU64,
@@ -145,6 +150,85 @@ fn attr(ino: u64, m: &fs::Metadata) -> FileAttr {
     }
 }
 
+/// Replaces the exclusion rules. Items kept in `local` that are no longer
+/// excluded go to `backing` (rclone, and so the cloud).
+pub(crate) fn apply_exclusions(
+    current: &RwLock<ExclusionSet>,
+    local: Option<&Path>,
+    backing: &Path,
+    exclusions: ExclusionSet,
+) {
+    *current.write().expect("exclusions lock") = exclusions;
+    let Some(local) = local else {
+        return;
+    };
+    let mut moved = 0;
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        let Ok(entries) = fs::read_dir(local.join(&rel)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let child = rel.join(entry.file_name());
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if is_excluded(current, &child) {
+                continue;
+            }
+            if is_dir {
+                stack.push(child);
+            } else {
+                let dst = backing.join(&child);
+                let result = dst
+                    .parent()
+                    .map_or(Ok(()), fs::create_dir_all)
+                    .and_then(|()| entry.metadata())
+                    .and_then(|meta| copy_file(&entry.path(), &dst, &meta))
+                    .and_then(|()| fs::remove_file(entry.path()));
+                match result {
+                    Ok(()) => moved += 1,
+                    Err(e) => {
+                        tracing::warn!(path = %child.display(), error = %e, "cannot move a no longer excluded file to the cloud")
+                    }
+                }
+            }
+        }
+    }
+    if moved > 0 {
+        tracing::info!(files = moved, "files no longer excluded moved to the cloud");
+    }
+    remove_empty_dirs(local);
+}
+
+fn is_excluded(set: &RwLock<ExclusionSet>, rel: &Path) -> bool {
+    rel.to_str()
+        .is_some_and(|r| !r.is_empty() && set.read().expect("exclusions lock").is_excluded(r))
+}
+
+/// Copies a regular file with its permissions and modification time.
+fn copy_file(src: &Path, dst: &Path, meta: &fs::Metadata) -> io::Result<()> {
+    fs::copy(src, dst)?;
+    let file = OpenOptions::new().write(true).open(dst)?;
+    file.set_modified(meta.modified()?)?;
+    file.sync_all()
+}
+
+/// Removes the empty folders under `root` (not `root` itself).
+fn remove_empty_dirs(root: &Path) {
+    fn walk(dir: &Path, root: &Path) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    walk(&entry.path(), root);
+                }
+            }
+        }
+        if dir != root {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+    walk(root, root);
+}
+
 /// Open options matching the `open(2)` flags sent by the kernel.
 fn open_options(flags: i32) -> OpenOptions {
     let mut options = OpenOptions::new();
@@ -160,9 +244,16 @@ fn open_options(flags: i32) -> OpenOptions {
 }
 
 impl RelayFs {
-    pub fn new(backing: PathBuf, gate: Arc<Gate>) -> Self {
+    pub fn new(
+        backing: PathBuf,
+        local: Option<PathBuf>,
+        exclusions: Arc<RwLock<ExclusionSet>>,
+        gate: Arc<Gate>,
+    ) -> Self {
         Self {
             backing,
+            local,
+            exclusions,
             inodes: Mutex::new(Inodes::default()),
             handles: Mutex::new(HashMap::new()),
             next_fh: AtomicU64::new(1),
@@ -211,9 +302,36 @@ impl RelayFs {
         self.inodes().path(ino.0).ok_or(Errno::ENOENT)
     }
 
-    /// Absolute path in the backing folder of an inode.
+    /// Whether `rel` is excluded from synchronisation (it then lives in the
+    /// local-only folder).
+    pub(crate) fn excluded(&self, rel: &Path) -> bool {
+        self.local.is_some() && is_excluded(&self.exclusions, rel)
+    }
+
+    /// Where `rel` lives: the local-only folder if it is excluded, else the
+    /// backing folder (the hidden rclone mount).
+    fn path_of(&self, rel: &Path) -> PathBuf {
+        match &self.local {
+            Some(local) if self.excluded(rel) => local.join(rel),
+            _ => self.backing.join(rel),
+        }
+    }
+
+    /// Like [`path_of`](Self::path_of), for an item about to be created:
+    /// makes its folder exist in the local-only folder if needed.
+    fn path_for_new(&self, rel: &Path) -> Result<PathBuf, Errno> {
+        let path = self.path_of(rel);
+        if !path.starts_with(&self.backing)
+            && let Some(parent) = path.parent()
+        {
+            fs::create_dir_all(parent).map_err(errno)?;
+        }
+        Ok(path)
+    }
+
+    /// Absolute path of an inode.
     fn real(&self, ino: INodeNo) -> Result<PathBuf, Errno> {
-        Ok(self.backing.join(self.rel(ino)?))
+        Ok(self.path_of(&self.rel(ino)?))
     }
 
     /// Relative path of `name` in directory `parent`.
@@ -226,7 +344,7 @@ impl RelayFs {
 
     /// Stats `rel` and counts a kernel lookup of it.
     fn entry(&self, rel: &Path) -> Result<FileAttr, Errno> {
-        let meta = fs::symlink_metadata(self.backing.join(rel)).map_err(errno)?;
+        let meta = fs::symlink_metadata(self.path_of(rel)).map_err(errno)?;
         let ino = self.inodes().lookup(rel);
         Ok(attr(ino, &meta))
     }
@@ -283,6 +401,29 @@ impl RelayFs {
                 }
             }
         }
+    }
+
+    /// Moves a file between the local-only folder and the backing folder
+    /// (they are different filesystems): copy, then delete the source.
+    fn move_across(
+        &self,
+        src: &Path,
+        dst: &Path,
+        flags: rustix::fs::RenameFlags,
+    ) -> Result<(), Errno> {
+        if flags.contains(rustix::fs::RenameFlags::EXCHANGE) {
+            return Err(Errno::EXDEV);
+        }
+        let meta = fs::symlink_metadata(src).map_err(errno)?;
+        // Folders and links: `mv` and file managers copy them themselves.
+        if !meta.is_file() {
+            return Err(Errno::EXDEV);
+        }
+        if flags.contains(rustix::fs::RenameFlags::NOREPLACE) && fs::symlink_metadata(dst).is_ok() {
+            return Err(Errno::EEXIST);
+        }
+        copy_file(src, dst, &meta).map_err(errno)?;
+        fs::remove_file(src).map_err(errno)
     }
 
     /// An open file of inode `ino`, if any.
@@ -466,7 +607,7 @@ impl Filesystem for RelayFs {
             let rel = self.child(parent, name)?;
             fs::DirBuilder::new()
                 .mode(mode & !umask & 0o7777)
-                .create(self.backing.join(&rel))
+                .create(self.path_for_new(&rel)?)
                 .map_err(errno)?;
             self.entry(&rel)
         });
@@ -479,7 +620,7 @@ impl Filesystem for RelayFs {
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         let result = self.with_backing(|| {
             let rel = self.child(parent, name)?;
-            fs::remove_file(self.backing.join(&rel)).map_err(errno)?;
+            fs::remove_file(self.path_of(&rel)).map_err(errno)?;
             self.inodes().unlinked(&rel);
             Ok(())
         });
@@ -492,7 +633,21 @@ impl Filesystem for RelayFs {
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         let result = self.with_backing(|| {
             let rel = self.child(parent, name)?;
-            fs::remove_dir(self.backing.join(&rel)).map_err(errno)?;
+            // Excluded items kept locally inside it count as content.
+            let scaffold = self
+                .local
+                .as_ref()
+                .filter(|_| !self.excluded(&rel))
+                .map(|local| local.join(&rel));
+            if let Some(dir) = &scaffold
+                && fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some())
+            {
+                return Err(Errno::ENOTEMPTY);
+            }
+            fs::remove_dir(self.path_of(&rel)).map_err(errno)?;
+            if let Some(dir) = scaffold {
+                let _ = fs::remove_dir(dir);
+            }
             self.inodes().unlinked(&rel);
             Ok(())
         });
@@ -512,7 +667,7 @@ impl Filesystem for RelayFs {
     ) {
         let result = self.with_backing(|| {
             let rel = self.child(parent, link_name)?;
-            std::os::unix::fs::symlink(target, self.backing.join(&rel)).map_err(errno)?;
+            std::os::unix::fs::symlink(target, self.path_for_new(&rel)?).map_err(errno)?;
             self.entry(&rel)
         });
         match result {
@@ -535,14 +690,27 @@ impl Filesystem for RelayFs {
             let from = self.child(parent, name)?;
             let to = self.child(newparent, newname)?;
             let rflags = rustix::fs::RenameFlags::from_bits(flags.bits()).ok_or(Errno::EINVAL)?;
-            rustix::fs::renameat_with(
-                rustix::fs::CWD,
-                self.backing.join(&from),
-                rustix::fs::CWD,
-                self.backing.join(&to),
-                rflags,
-            )
-            .map_err(|e| Errno::from_i32(e.raw_os_error()))?;
+            let src = self.path_of(&from);
+            let dst = self.path_for_new(&to)?;
+            if src.starts_with(&self.backing) == dst.starts_with(&self.backing) {
+                rustix::fs::renameat_with(rustix::fs::CWD, &src, rustix::fs::CWD, &dst, rflags)
+                    .map_err(|e| Errno::from_i32(e.raw_os_error()))?;
+                // Excluded items kept locally inside a moved folder follow it.
+                if let Some(local) = &self.local
+                    && src.starts_with(&self.backing)
+                    && local.join(&from).is_dir()
+                {
+                    let target = local.join(&to);
+                    if let Some(parent) = target.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let _ = fs::rename(local.join(&from), target);
+                }
+            } else {
+                // Between the local-only folder and rclone: a temporary file
+                // saved under its final name, or the reverse.
+                self.move_across(&src, &dst, rflags)?;
+            }
             let mut inodes = self.inodes();
             if rflags.contains(rustix::fs::RenameFlags::EXCHANGE) {
                 inodes.exchanged(&from, &to);
@@ -567,7 +735,12 @@ impl Filesystem for RelayFs {
     ) {
         let result = self.with_backing(|| {
             let rel = self.child(newparent, newname)?;
-            fs::hard_link(self.real(ino)?, self.backing.join(&rel)).map_err(errno)?;
+            let from = self.real(ino)?;
+            let to = self.path_for_new(&rel)?;
+            if from.starts_with(&self.backing) != to.starts_with(&self.backing) {
+                return Err(Errno::EXDEV);
+            }
+            fs::hard_link(from, to).map_err(errno)?;
             self.entry(&rel)
         });
         match result {
@@ -713,19 +886,42 @@ impl Filesystem for RelayFs {
                     name: "..".into(),
                 },
             ];
+            // The folder itself, then (unless it is excluded) the excluded
+            // items kept locally inside it.
+            let mut sources = vec![self.path_of(&rel)];
+            if let Some(local) = &self.local
+                && !self.excluded(&rel)
+            {
+                sources.push(local.join(&rel));
+            }
+            let mut seen = std::collections::HashSet::new();
             let inodes = self.inodes();
-            for entry in fs::read_dir(self.backing.join(&rel)).map_err(errno)? {
-                let entry = entry.map_err(errno)?;
-                let kind = entry
-                    .file_type()
-                    .ok()
-                    .and_then(FileType::from_std)
-                    .unwrap_or(FileType::RegularFile);
-                let name = entry.file_name();
-                // Known inodes keep their number; others show the backing
-                // one (informational only: the kernel looks names up).
-                let ino = inodes.peek(&rel.join(&name)).unwrap_or(entry.ino());
-                items.push(DirItem { ino, kind, name });
+            for (i, dir) in sources.iter().enumerate() {
+                let entries = match fs::read_dir(dir) {
+                    Ok(entries) => entries,
+                    // No local item in this folder.
+                    Err(_) if i > 0 => continue,
+                    Err(e) => return Err(errno(e)),
+                };
+                let from_local = !dir.starts_with(&self.backing);
+                for entry in entries {
+                    let entry = entry.map_err(errno)?;
+                    let name = entry.file_name();
+                    let child = rel.join(&name);
+                    // From rclone: not the excluded ones. Locally: only them.
+                    if self.excluded(&child) != from_local || !seen.insert(name.clone()) {
+                        continue;
+                    }
+                    let kind = entry
+                        .file_type()
+                        .ok()
+                        .and_then(FileType::from_std)
+                        .unwrap_or(FileType::RegularFile);
+                    // Known inodes keep their number; others show the backing
+                    // one (informational only: the kernel looks names up).
+                    let ino = inodes.peek(&child).unwrap_or(entry.ino());
+                    items.push(DirItem { ino, kind, name });
+                }
             }
             drop(inodes);
             Ok(self.add_handle(Handle::Dir(items)))
@@ -871,7 +1067,7 @@ impl Filesystem for RelayFs {
             // refuses to create without write access. The kernel only sends
             // reads for a read-only handle, so a writable descriptor is safe.
             options.write(true);
-            let file = options.open(self.backing.join(&rel)).map_err(errno)?;
+            let file = options.open(self.path_for_new(&rel)?).map_err(errno)?;
             let meta = file.metadata().map_err(errno)?;
             let ino = self.inodes().lookup(&rel);
             // Reopened without O_CREAT/O_EXCL, but writable like here.

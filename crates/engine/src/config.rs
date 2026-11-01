@@ -78,6 +78,50 @@ pub struct AccountRecord {
     /// Mounted when the daemon starts; cleared by `nuage unmount`.
     #[serde(default = "yes")]
     pub auto_mount: bool,
+    /// The default exclusion patterns apply ([`nuage_core::DEFAULT_PATTERNS`]).
+    #[serde(default = "yes")]
+    pub default_exclusions: bool,
+    #[serde(default, rename = "exclusion")]
+    pub exclusions: Vec<StoredExclusion>,
+}
+
+/// An exclusion rule of an account, as saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredExclusion {
+    #[serde(flatten)]
+    pub rule: StoredRule,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum StoredRule {
+    /// A path relative to the account root.
+    Path(String),
+    Glob(String),
+}
+
+impl AccountRecord {
+    /// Every rule of the account: the default patterns (if on), then the
+    /// user's rules.
+    pub fn exclusion_rules(&self) -> Vec<nuage_core::ExclusionRule> {
+        let defaults: &[&str] = if self.default_exclusions {
+            &nuage_core::DEFAULT_PATTERNS
+        } else {
+            &[]
+        };
+        let defaults = defaults
+            .iter()
+            .map(|p| nuage_core::ExclusionRule::Glob((*p).to_owned()));
+        let own = self.exclusions.iter().map(|e| match &e.rule {
+            StoredRule::Path(p) => nuage_core::ExclusionRule::Path(nuage_core::RemotePath::new(
+                self.account.id.clone(),
+                p.clone(),
+            )),
+            StoredRule::Glob(g) => nuage_core::ExclusionRule::Glob(g.clone()),
+        });
+        defaults.chain(own).collect()
+    }
 }
 
 fn yes() -> bool {
@@ -148,6 +192,11 @@ mod tests {
                 },
                 paused: true,
                 auto_mount: false,
+                default_exclusions: false,
+                exclusions: vec![StoredExclusion {
+                    rule: StoredRule::Glob("*.log".into()),
+                    created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                }],
             }],
         };
         config.save(&path).unwrap();

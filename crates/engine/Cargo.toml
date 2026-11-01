@@ -15,6 +15,7 @@ local = ["nuage-providers/local"]
 gdrive = ["nuage-providers/gdrive"]
 
 [dependencies]
+chrono.workspace = true
 nuage-core.workspace = true
 nuage-fs.workspace = true
 nuage-providers.workspace = true

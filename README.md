@@ -285,9 +285,28 @@ Every command accepts `--json`. Exit codes:
 | 4 | authentication required |
 
 Working so far: `status [--watch]`, `account add | list | rename | reconnect
-| remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, `config get |
-set` and `daemon status | stop`. File commands (`ls`, `cp`…), exclusions and
-pins answer "not implemented yet" (exit code 1). Run
+| remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, `exclude add |
+remove | list`, `config get | set` and `daemon status | stop`. File commands
+(`ls`, `cp`…) and pins answer "not implemented yet" (exit code 1).
+
+### Exclusions
+
+Items you exclude are neither downloaded nor uploaded, and disappear from
+the folder; they stay intact in the cloud.
+
+```sh
+nuage exclude add "Google Drive" Archives            # a folder of the account
+nuage exclude add "Google Drive" --glob 'node_modules/'   # a pattern, anywhere
+nuage exclude list
+nuage exclude remove "Google Drive" Archives
+```
+
+Temporary and lock files of office suites are excluded by default (`~$*`,
+`.~lock.*#`, `*.tmp`, `.goutputstream-*`); turn that off with
+`nuage config set "<account>:default-exclusions" off`. A file you create in
+the folder whose name is excluded stays on this computer only, at its place
+in the folder. Changing an exclusion briefly remounts the account; if
+uploads are pending, add `--yes`. Run
 `nuage --help` for the full list.
 
 Settings (`nuage config get`, `nuage config set <key> <value>`):
@@ -297,6 +316,7 @@ Settings (`nuage config get`, `nuage config set <key> <value>`):
 | `cache-limit` | cache limit of new accounts, e.g. `20G` |
 | `<account>:cache-limit` | cache limit of one account |
 | `cache-max-age` | how long unused files stay in the cache, e.g. `30d` |
+| `<account>:default-exclusions` | `on` or `off`: exclude temporary and lock files |
 | `quit-with-pending` | what `nuage daemon stop` does while uploads are pending: `finish-in-background` (default), `ask` or `quit-now` |
 
 Cache settings apply the next time the account is mounted.

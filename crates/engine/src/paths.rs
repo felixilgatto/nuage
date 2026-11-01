@@ -86,6 +86,11 @@ impl Paths {
         self.data_dir.join("mounts")
     }
 
+    /// Excluded items created locally in an account's folder.
+    pub fn local_only(&self, account: &nuage_core::AccountId) -> PathBuf {
+        self.data_dir.join("local-only").join(account.as_str())
+    }
+
     pub fn rcd_pid_file(&self) -> PathBuf {
         self.data_dir.join("rcd.pid")
     }

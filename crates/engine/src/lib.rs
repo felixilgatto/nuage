@@ -8,7 +8,7 @@
 //!  ├─ uploads           pause / resume uploads, per account or global
 //!  ├─ status            polls vfs/stats and operations/about, publishes events
 //!  ├─ settings          `nuage config get/set`
-//!  ├─ ExclusionManager  per-account exclusion rules → rclone filters (milestone 7)
+//!  ├─ exclusions        per-account rules → rclone filters + local-only in nuage-fs
 //!  ├─ FileService       list, mkdir, move, copy, delete, upload, download, link (milestone 9)
 //!  └─ PinManager        offline pinning (v1.1)
 //! ```
@@ -41,7 +41,6 @@ use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 
 pub use config::QuitBehavior;
-pub use exclusions::ExclusionManager;
 pub use files::FileService;
 pub use mounts::MountPlan;
 pub use paths::Paths;
@@ -95,7 +94,6 @@ pub(crate) struct Inner {
     sign_in: Mutex<Option<signin::PendingSignIn>>,
     /// `rclone.conf` is encrypted with a password from the keyring.
     config_encrypted: std::sync::atomic::AtomicBool,
-    exclusions: ExclusionManager,
     files: FileService,
     pins: PinManager,
 }
@@ -206,7 +204,6 @@ impl Engine {
                 background: std::sync::Mutex::new(None),
                 sign_in: Mutex::new(None),
                 config_encrypted: std::sync::atomic::AtomicBool::new(false),
-                exclusions: ExclusionManager::default(),
                 files: FileService::default(),
                 pins: PinManager::default(),
             }),
@@ -375,19 +372,24 @@ impl Engine {
                 .await
                 .map(|()| Reply::Done),
             Command::PublicLink { path } => inner.files.public_link(&path).await.map(Reply::Link),
-            Command::ExcludeAdd { account, rule } => inner
-                .exclusions
-                .add(&account, rule)
+            Command::ExcludeAdd {
+                account,
+                rule,
+                force,
+            } => inner
+                .add_exclusion(&account, rule, force)
                 .await
                 .map(|()| Reply::Done),
-            Command::ExcludeRemove { account, rule } => inner
-                .exclusions
-                .remove(&account, &rule)
+            Command::ExcludeRemove {
+                account,
+                rule,
+                force,
+            } => inner
+                .remove_exclusion(&account, rule, force)
                 .await
                 .map(|()| Reply::Done),
             Command::ExcludeList { account } => inner
-                .exclusions
-                .list(account.as_ref())
+                .list_exclusions(account.as_ref())
                 .await
                 .map(Reply::Exclusions),
             Command::PinAdd { path, kind } => {

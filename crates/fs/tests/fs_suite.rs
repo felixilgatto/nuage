@@ -9,7 +9,25 @@ use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use nuage_core::{ExclusionRule, ExclusionSet};
 use nuage_fs::{MountConfig, MountedFs};
+
+fn globs(patterns: &[&str]) -> ExclusionSet {
+    let rules: Vec<ExclusionRule> = patterns
+        .iter()
+        .map(|p| ExclusionRule::Glob((*p).to_owned()))
+        .collect();
+    ExclusionSet::new(&rules)
+}
+
+fn with_exclusions(patterns: &[&str]) -> MountConfig {
+    MountConfig {
+        // The fixture puts the local-only folder next to the backing one.
+        local_only: Some(PathBuf::new()),
+        exclusions: globs(patterns),
+        ..MountConfig::default()
+    }
+}
 
 fn fuse_available() -> Result<(), String> {
     if !Path::new("/dev/fuse").exists() {
@@ -27,6 +45,7 @@ struct Fixture {
     fs: Option<MountedFs>,
     backing: PathBuf,
     mnt: PathBuf,
+    local: PathBuf,
     _dir: tempfile::TempDir,
 }
 
@@ -45,13 +64,19 @@ impl Fixture {
             .unwrap();
         let backing = dir.path().join("backing");
         let mnt = dir.path().join("mnt");
+        let local = dir.path().join("local-only");
         fs::create_dir_all(&backing).unwrap();
         fs::create_dir_all(&mnt).unwrap();
+        let config = MountConfig {
+            local_only: config.local_only.map(|_| local.clone()),
+            ..config
+        };
         let fs = nuage_fs::mount(&backing, &mnt, &config).unwrap();
         Some(Self {
             fs: Some(fs),
             backing,
             mnt,
+            local,
             _dir: dir,
         })
     }
@@ -62,6 +87,10 @@ impl Fixture {
 
     fn b(&self, rel: &str) -> PathBuf {
         self.backing.join(rel)
+    }
+
+    fn l(&self, rel: &str) -> PathBuf {
+        self.local.join(rel)
     }
 
     fn fs(&self) -> &MountedFs {
@@ -415,4 +444,90 @@ fn fails_cleanly_when_unavailable_too_long() {
     assert_eq!(err.raw_os_error(), Some(libc::EIO));
     f.fs().set_available(true);
     fs::write(f.m("ok"), "ok").unwrap();
+}
+
+#[test]
+fn excluded_items_stay_local() {
+    let f = fixture!(with_exclusions(&[
+        "*.tmp",
+        "node_modules/",
+        ".goutputstream-*"
+    ]));
+    // Excluded items already in the cloud are hidden.
+    fs::write(f.b("remote.tmp"), "remote").unwrap();
+    fs::write(f.b("kept.txt"), "kept").unwrap();
+    let names = |dir: &Path| -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&f.mnt), vec!["kept.txt"]);
+    assert_eq!(
+        fs::metadata(f.m("remote.tmp")).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+
+    // Created locally: kept local, visible at its path, never in the backing folder.
+    fs::write(f.m("draft.tmp"), "draft").unwrap();
+    assert!(f.l("draft.tmp").is_file());
+    assert!(
+        !f.b("draft.tmp").exists() || fs::read_to_string(f.b("draft.tmp")).unwrap() == "remote"
+    );
+    assert_eq!(fs::read_to_string(f.m("draft.tmp")).unwrap(), "draft");
+    fs::create_dir_all(f.m("proj/node_modules/lib")).unwrap();
+    fs::write(f.m("proj/node_modules/lib/index.js"), "js").unwrap();
+    fs::write(f.m("proj/main.js"), "main").unwrap();
+    assert!(f.b("proj/main.js").is_file());
+    assert!(!f.b("proj/node_modules").exists());
+    assert!(f.l("proj/node_modules/lib/index.js").is_file());
+    assert_eq!(names(&f.m("proj")), vec!["main.js", "node_modules"]);
+    assert_eq!(names(&f.m("proj/node_modules/lib")), vec!["index.js"]);
+
+    // A folder holding local items is not empty.
+    fs::remove_file(f.m("proj/main.js")).unwrap();
+    let err = fs::remove_dir(f.m("proj")).unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(libc::ENOTEMPTY));
+    fs::remove_dir_all(f.m("proj/node_modules")).unwrap();
+    fs::remove_dir(f.m("proj")).unwrap();
+    assert!(!f.b("proj").exists());
+    assert!(!f.l("proj").exists());
+
+    // GNOME's atomic save: a temporary file renamed to its final name.
+    fs::write(f.m(".goutputstream-AB12"), "saved").unwrap();
+    assert!(!f.b(".goutputstream-AB12").exists());
+    fs::rename(f.m(".goutputstream-AB12"), f.m("notes.txt")).unwrap();
+    assert_eq!(fs::read_to_string(f.b("notes.txt")).unwrap(), "saved");
+    assert!(!f.l(".goutputstream-AB12").exists());
+    assert_eq!(fs::read_to_string(f.m("notes.txt")).unwrap(), "saved");
+    // And the reverse: renamed to an excluded name, it leaves the cloud.
+    fs::rename(f.m("notes.txt"), f.m("notes.tmp")).unwrap();
+    assert!(!f.b("notes.txt").exists());
+    assert_eq!(fs::read_to_string(f.l("notes.tmp")).unwrap(), "saved");
+}
+
+#[test]
+fn reincluded_items_go_to_the_cloud() {
+    let f = fixture!(with_exclusions(&["*.tmp", "build/"]));
+    fs::write(f.m("a.tmp"), "a").unwrap();
+    fs::create_dir(f.m("build")).unwrap();
+    fs::write(f.m("build/out.bin"), "bin").unwrap();
+    assert!(!f.b("a.tmp").exists());
+
+    // `*.tmp` is no longer excluded: a.tmp moves to the backing folder.
+    f.fs().set_exclusions(globs(&["build/"]));
+    assert_eq!(fs::read_to_string(f.b("a.tmp")).unwrap(), "a");
+    assert!(!f.l("a.tmp").exists());
+    assert_eq!(fs::read_to_string(f.m("a.tmp")).unwrap(), "a");
+    assert!(f.l("build/out.bin").is_file());
+
+    // A new exclusion hides what is already in the cloud.
+    f.fs().set_exclusions(globs(&["build/", "a.tmp"]));
+    assert_eq!(
+        fs::metadata(f.m("a.tmp")).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+    assert!(f.b("a.tmp").exists(), "nothing is deleted in the cloud");
 }

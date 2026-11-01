@@ -126,6 +126,17 @@ pub struct MountRequest {
     pub vfs_opt: VfsOpt,
     #[serde(rename = "mountOpt")]
     pub mount_opt: MountOpt,
+    /// Filters of this mount only (`_filter`).
+    #[serde(rename = "_filter", skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Filter>,
+}
+
+/// rclone filter options of one call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Filter {
+    /// Rules in rclone's syntax, e.g. `"- *.tmp"`.
+    #[serde(rename = "FilterRule")]
+    pub filter_rule: Vec<String>,
 }
 
 /// The subset of rclone's VFS options set by Nuage.

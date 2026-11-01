@@ -25,6 +25,23 @@ fn random_id() -> Result<String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// Number of files under `dir`.
+fn walk_files(dir: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                walk_files(&e.path())
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
 /// The `config_*` parameters, which answer rclone's configuration questions.
 fn config_answers(parameters: &Map<String, Value>) -> Vec<(String, String)> {
     parameters
@@ -259,6 +276,8 @@ impl Inner {
             account: account.clone(),
             paused: false,
             auto_mount: true,
+            default_exclusions: true,
+            exclusions: Vec::new(),
         });
         let i = st.config.accounts.len() - 1;
         let mounted = match self.save(st) {
@@ -418,6 +437,17 @@ impl Inner {
             }
         }
 
+        // Excluded files created locally exist nowhere else.
+        let local_only = self.paths.local_only(&account.id);
+        let local_files = walk_files(&local_only);
+        if local_files > 0 && !force {
+            return Err(Error::Busy(format!(
+                "{local_files} excluded file(s) of \"{}\" exist only on this computer ({}). Move them elsewhere, or remove anyway with --force (they are deleted).",
+                account.display_name,
+                local_only.display()
+            )));
+        }
+
         let mut st = self.state.lock().await;
         let i = st.resolve(&account.id)?;
         // rclone names the cache after the backend it wraps (an alias of a
@@ -460,6 +490,7 @@ impl Inner {
         }
         // Only removed if empty: never delete user files.
         let _ = std::fs::remove_dir(&account.mount_point);
+        let _ = std::fs::remove_dir_all(&local_only);
         let _ = std::fs::remove_dir(
             crate::MountPlan::layered(&account, &self.paths).rclone_mount_point,
         );

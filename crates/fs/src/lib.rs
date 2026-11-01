@@ -25,12 +25,14 @@ mod relay;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use std::thread::JoinHandle;
 
 use fuser::{Config, Session, SessionACL};
+
+pub use nuage_core::ExclusionSet;
 
 use gate::Gate;
 use relay::RelayFs;
@@ -49,6 +51,8 @@ pub struct MountedFs {
     mount_point: PathBuf,
     backing: PathBuf,
     gate: Arc<Gate>,
+    exclusions: Arc<RwLock<ExclusionSet>>,
+    local_only: Option<PathBuf>,
 }
 
 impl fmt::Debug for MountedFs {
@@ -67,6 +71,10 @@ pub struct MountConfig {
     pub name: String,
     /// How long requests wait for an unavailable backing folder.
     pub wait: Duration,
+    /// Folder where items matching `exclusions` live instead of the backing
+    /// folder (`data/local-only/<account>`). `None`: no exclusion.
+    pub local_only: Option<PathBuf>,
+    pub exclusions: ExclusionSet,
 }
 
 impl Default for MountConfig {
@@ -74,6 +82,8 @@ impl Default for MountConfig {
         Self {
             name: "nuage".to_owned(),
             wait: DEFAULT_WAIT,
+            local_only: None,
+            exclusions: ExclusionSet::default(),
         }
     }
 }
@@ -84,7 +94,16 @@ impl Default for MountConfig {
 /// wrapper that relays to the host), like rclone.
 pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Result<MountedFs> {
     let gate = Arc::new(Gate::new(true, config.wait));
-    let fs = RelayFs::new(backing.to_owned(), Arc::clone(&gate));
+    if let Some(local) = &config.local_only {
+        std::fs::create_dir_all(local)?;
+    }
+    let exclusions = Arc::new(RwLock::new(config.exclusions.clone()));
+    let fs = RelayFs::new(
+        backing.to_owned(),
+        config.local_only.clone(),
+        Arc::clone(&exclusions),
+        Arc::clone(&gate),
+    );
     let mount_point = mount_point.canonicalize()?;
     // Commas separate options: keep them out of the name.
     let name = config.name.replace([',', '\\'], "_");
@@ -124,6 +143,8 @@ pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Re
         mount_point,
         backing: backing.to_owned(),
         gate,
+        exclusions,
+        local_only: config.local_only.clone(),
     })
 }
 
@@ -140,6 +161,17 @@ impl MountedFs {
     /// wait (up to [`MountConfig::wait`]) instead of failing at once.
     pub fn set_available(&self, available: bool) {
         self.gate.set(available);
+    }
+
+    /// Replaces the exclusion rules. Items kept locally that are no longer
+    /// excluded are moved to the backing folder. Blocking.
+    pub fn set_exclusions(&self, exclusions: ExclusionSet) {
+        relay::apply_exclusions(
+            &self.exclusions,
+            self.local_only.as_deref(),
+            &self.backing,
+            exclusions,
+        );
     }
 
     /// Unmounts and waits for the serving threads to stop. Blocking.

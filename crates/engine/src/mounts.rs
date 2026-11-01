@@ -3,8 +3,10 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use nuage_core::{Account, AccountId, Error, Event, Result, VfsOptions};
-use nuage_rclone::{MountOpt, MountRequest, VfsOpt};
+use nuage_core::{
+    Account, AccountId, Error, Event, ExclusionRule, ExclusionSet, Result, VfsOptions,
+};
+use nuage_rclone::{Filter, MountOpt, MountRequest, VfsOpt};
 
 use crate::units::rclone_duration;
 use crate::{Inner, Paths, State};
@@ -45,6 +47,7 @@ pub fn mount_request(
     plan: &MountPlan,
     recommended: &VfsOptions,
     cache_max_age_secs: Option<u64>,
+    exclusions: &[ExclusionRule],
 ) -> Result<MountRequest> {
     let mount_point = path_str(&plan.rclone_mount_point)?.to_owned();
     let cache_mode = match recommended.cache_mode {
@@ -70,6 +73,9 @@ pub fn mount_request(
         mount_opt: MountOpt {
             volume_name: Some(account.display_name.clone()),
         },
+        filter: (!exclusions.is_empty()).then(|| Filter {
+            filter_rule: ExclusionSet::rclone_filter_rules(exclusions),
+        }),
     })
 }
 
@@ -349,11 +355,19 @@ impl Inner {
             force_unmount(hidden).await?;
         }
         std::fs::create_dir_all(hidden)?;
+        let rules = st
+            .config
+            .accounts
+            .iter()
+            .find(|r| r.account.id == account.id)
+            .map(|r| r.exclusion_rules())
+            .unwrap_or_default();
         let request = mount_request(
             account,
             &plan,
             &provider.recommended_vfs_opts(),
             st.config.settings.cache_max_age_secs,
+            &rules,
         )?;
         rc.mount(&request)
             .await
@@ -371,6 +385,8 @@ impl Inner {
                     let backing = hidden.clone();
                     let config = nuage_fs::MountConfig {
                         name: account.remote_name.clone(),
+                        local_only: Some(self.paths.local_only(&account.id)),
+                        exclusions: ExclusionSet::new(&rules),
                         ..nuage_fs::MountConfig::default()
                     };
                     tokio::task::spawn_blocking(move || nuage_fs::mount(&backing, &user, &config))
@@ -452,6 +468,30 @@ impl Inner {
         });
         tracing::info!(account = %account.display_name, "unmounted");
         Ok(())
+    }
+
+    /// Remounts only the hidden rclone mount of account `i` (new filters);
+    /// `nuage-fs` stays at the user's folder and makes requests wait.
+    pub(crate) async fn remount_hidden(&self, st: &mut State, i: usize) -> Result<()> {
+        let account = st.record(i).account.clone();
+        if !st.is_mounted(&account.id) {
+            return Ok(());
+        }
+        let runtime = st.runtime(&account.id);
+        runtime.mounted = None;
+        if let Some(fs) = &runtime.fs {
+            fs.set_available(false);
+        }
+        let hidden = MountPlan::layered(&account, &self.paths).rclone_mount_point;
+        let result = self.rc().await?.unmount(path_str(&hidden)?).await;
+        if let Err(e) = result
+            && fuse_mounts().contains(&hidden)
+        {
+            tracing::warn!(error = %e, "mount/unmount failed, detaching");
+            force_unmount(&hidden).await?;
+        }
+        tracing::info!(account = %account.display_name, "remounting the hidden mount");
+        self.mount_locked(st, i).await
     }
 
     /// rclone stopped: the hidden mounts are gone. `nuage-fs` stays mounted
@@ -617,7 +657,8 @@ mod tests {
         let paths = Paths::under(Path::new("/data"));
         let plan = MountPlan::layered(&a, &paths);
         assert_eq!(plan.user_mount_point, Path::new("/home/me/Cloud/Drive"));
-        let req = mount_request(&a, &plan, &VfsOptions::default(), Some(3600)).unwrap();
+        let rules = [ExclusionRule::Glob("*.tmp".into())];
+        let req = mount_request(&a, &plan, &VfsOptions::default(), Some(3600), &rules).unwrap();
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["fs"], "nuage-Drive:");
         assert_eq!(json["mountPoint"], "/data/data/mounts/Drive");
@@ -627,5 +668,9 @@ mod tests {
         assert_eq!(json["vfsOpt"]["WriteBack"], HOLD_WRITE_BACK);
         assert!(json["vfsOpt"].get("PollInterval").is_none());
         assert_eq!(json["mountOpt"]["VolumeName"], "Drive");
+        assert_eq!(
+            json["_filter"]["FilterRule"],
+            serde_json::json!(["- *.tmp", "- *.tmp/**"])
+        );
     }
 }

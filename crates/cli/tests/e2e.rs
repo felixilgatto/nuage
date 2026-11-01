@@ -698,3 +698,126 @@ fn google_sign_in_can_be_cancelled() {
     assert!(!conf.contains("[nuage-"), "the remote is deleted:\n{conf}");
     assert!(!env.path("home/Cloud/Drive").exists());
 }
+
+#[test]
+fn exclusions() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let src = env.path("src-Ex");
+    std::fs::create_dir_all(src.join("Archives")).unwrap();
+    std::fs::create_dir_all(src.join("docs")).unwrap();
+    std::fs::write(src.join("Archives/a.zip"), "zip").unwrap();
+    std::fs::write(src.join("docs/report.odt"), "odt").unwrap();
+    std::fs::write(src.join("docs/old.log"), "old").unwrap();
+    let mount = env.path("home/Cloud/Ex");
+    let account = env.json(&[
+        "account",
+        "add",
+        "local",
+        "--name",
+        "Ex",
+        "--mount-point",
+        mount.to_str().unwrap(),
+        "--param",
+        &format!("root={}", src.display()),
+    ]);
+    let id = account["id"].as_str().unwrap().to_owned();
+    let hidden = env.path(&format!("home/.local/share/nuage/mounts/{id}"));
+    let local_only = env.path(&format!("home/.local/share/nuage/local-only/{id}"));
+
+    // The default patterns.
+    let list = env.json(&["exclude", "list", "Ex"]);
+    assert_eq!(list.as_array().unwrap().len(), 4);
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["default"] == true)
+    );
+
+    env.json(&["exclude", "add", "Ex", "Archives"]);
+    env.json(&["exclude", "add", "Ex", "--glob", "*.log"]);
+    assert_eq!(
+        env.json_error(&["exclude", "add", "Ex", "--glob", "*.log"], 1),
+        "already_exists"
+    );
+    assert_eq!(
+        env.json_error(&["exclude", "add", "Ex", "/"], 2),
+        "invalid_argument"
+    );
+    // Hidden from the folder, kept in the cloud, filtered by rclone too.
+    assert!(!mount.join("Archives").exists());
+    assert!(!mount.join("docs/old.log").exists());
+    assert!(mount.join("docs/report.odt").exists());
+    assert!(src.join("Archives/a.zip").exists() && src.join("docs/old.log").exists());
+    assert!(!hidden.join("Archives").exists(), "rclone filters applied");
+    assert!(!hidden.join("docs/old.log").exists());
+
+    // Excluded files created locally never leave this computer.
+    std::fs::write(mount.join("docs/new.log"), "new").unwrap();
+    std::fs::write(mount.join("draft.tmp"), "draft").unwrap();
+    std::fs::write(mount.join("kept.txt"), "kept").unwrap();
+    env.wait_until("kept.txt is uploaded", Duration::from_secs(20), |_| {
+        src.join("kept.txt").exists()
+    });
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(!src.join("docs/new.log").exists());
+    assert!(!src.join("draft.tmp").exists());
+    assert_eq!(
+        std::fs::read_to_string(local_only.join("docs/new.log")).unwrap(),
+        "new"
+    );
+    assert_eq!(
+        std::fs::read_to_string(mount.join("docs/new.log")).unwrap(),
+        "new"
+    );
+
+    // Changing a rule while uploads are pending needs --yes.
+    env.json(&["pause", "Ex"]);
+    std::fs::write(mount.join("pending.txt"), "p").unwrap();
+    env.wait_until("the write is queued", Duration::from_secs(10), |env| {
+        env.account_state("Ex")["state"]["queued"] == 1
+    });
+    assert_eq!(
+        env.json_error(&["exclude", "add", "Ex", "--glob", "*.bak"], 1),
+        "busy"
+    );
+    env.json(&["exclude", "add", "Ex", "--glob", "*.bak", "--yes"]);
+    env.json(&["resume", "Ex"]);
+    env.wait_until("pending.txt is uploaded", Duration::from_secs(20), |_| {
+        src.join("pending.txt").exists()
+    });
+
+    // Included again: the local file goes to the cloud, the remote one shows.
+    env.json(&["exclude", "remove", "Ex", "--glob", "*.log"]);
+    env.wait_until("new.log is uploaded", Duration::from_secs(20), |_| {
+        std::fs::read_to_string(src.join("docs/new.log")).is_ok_and(|s| s == "new")
+    });
+    assert!(mount.join("docs/old.log").exists());
+    assert!(!local_only.join("docs/new.log").exists());
+    assert_eq!(
+        env.json_error(&["exclude", "remove", "Ex", "--glob", "*.tmp"], 2),
+        "invalid_argument",
+        "defaults are turned off, not removed"
+    );
+
+    // Defaults off: draft.tmp goes to the cloud too.
+    let set = env.json(&["config", "set", "Ex:default-exclusions", "off"]);
+    assert_eq!(set["Ex:default-exclusions"], "off");
+    env.wait_until("draft.tmp is uploaded", Duration::from_secs(20), |_| {
+        src.join("draft.tmp").exists()
+    });
+
+    // Local-only files are protected from an account removal.
+    std::fs::write(mount.join("only-here.bak"), "bak").unwrap();
+    assert_eq!(
+        env.json_error(&["account", "remove", "Ex", "--yes"], 1),
+        "busy"
+    );
+    env.json(&["account", "remove", "Ex", "--yes", "--force"]);
+    assert!(!local_only.exists());
+    assert!(
+        src.join("Archives/a.zip").exists(),
+        "nothing deleted in the cloud"
+    );
+}

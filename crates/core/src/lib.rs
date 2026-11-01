@@ -27,7 +27,7 @@ pub use command::{
 pub use entry::{Entry, EntryKind, NativeDoc, NativeDocKind};
 pub use error::{Error, Result};
 pub use event::Event;
-pub use exclusion::{Exclusion, ExclusionRule};
+pub use exclusion::{DEFAULT_PATTERNS, Exclusion, ExclusionRule, ExclusionSet};
 pub use pin::{Pin, PinKind, PinState};
 pub use provider::{
     AuthKind, AuthSpec, CacheMode, CredentialField, CustomClient, NativeDocPolicy, SetupInput,

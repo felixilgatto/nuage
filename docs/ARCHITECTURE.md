@@ -5,10 +5,11 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 4. The daemon supervises rclone, mounts each account
-> in two layers (`nuage-fs` over a hidden rclone mount), pauses uploads and
-> reports the status; the CLI drives all of it. File operations,
-> exclusions, Google sign-in and pinning still return `not_implemented`.
+> Status: milestone 7. The daemon supervises rclone, signs in to Google
+> Drive, mounts each account in two layers (`nuage-fs` over a hidden rclone
+> mount), applies exclusions, pauses uploads and reports the status; the
+> CLI drives all of it. File operations (milestone 9) and pinning (v1.1)
+> still return `not_implemented`.
 
 ## Processes
 
@@ -206,6 +207,30 @@ passes it to rcd as `RCLONE_CONFIG_PASS`. Without a keyring (headless, or
 `StatusReport.config_encrypted` is `false`. An encrypted file without its
 keyring stops the daemon with a message. The password is never logged
 (`RcdSupervisor`'s `Debug` hides it).
+
+### Exclusions
+
+Per account, in `config.toml`: user rules (`Path` relative to the account
+root, or `Glob`) and the default patterns (`~$*`, `.~lock.*#`, `*.tmp`,
+`.goutputstream-*`, on unless `<account>:default-exclusions off`).
+`nuage_core::ExclusionSet` matches paths with rclone's filter semantics
+(a pattern without `/` matches a name at any depth; everything inside an
+excluded folder is excluded) and produces the rclone rules (`- <rule>`,
+`- <rule>/**`). Two layers apply them:
+
+- **rclone filters** on the hidden mount (`_filter.FilterRule` of
+  `mount/mount`): excluded remote items are neither listed nor downloaded.
+- **`nuage-fs`**: an excluded path always lives in
+  `data/local-only/<account>`, a non-excluded one on the hidden mount.
+  Listings merge both; renaming a file between them copies it (atomic saves
+  write an excluded temporary file and rename it to its final name). rclone
+  alone would upload an excluded file created locally.
+
+A change is given to `nuage-fs` at once (files no longer excluded move to
+rclone, and so to the cloud), then only the hidden mount is remounted
+(`remount_hidden`): the user's folder stays, requests wait meanwhile.
+Refused while uploads are pending unless `force` (`--yes`). Removing an
+account with local-only files needs `--force`.
 
 ### Pause
 

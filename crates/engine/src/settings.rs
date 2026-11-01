@@ -18,6 +18,7 @@ use crate::{Inner, State};
 const CACHE_LIMIT: &str = "cache-limit";
 const CACHE_MAX_AGE: &str = "cache-max-age";
 const QUIT_WITH_PENDING: &str = "quit-with-pending";
+const DEFAULT_EXCLUSIONS: &str = "default-exclusions";
 
 fn entry(key: impl Into<String>, value: impl Into<String>) -> ConfigEntry {
     ConfigEntry {
@@ -43,14 +44,22 @@ fn all_entries(st: &State, recommended_age: Option<u64>) -> Vec<ConfigEntry> {
             format!("{}:{CACHE_LIMIT}", r.account.display_name),
             format_size(r.account.cache_limit),
         ));
+        entries.push(entry(
+            format!("{}:{DEFAULT_EXCLUSIONS}", r.account.display_name),
+            on_off(r.default_exclusions),
+        ));
     }
     entries
 }
 
 fn unknown_key(key: &str) -> Error {
     Error::InvalidArgument(format!(
-        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, {CACHE_MAX_AGE}, {QUIT_WITH_PENDING}."
+        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, <account>:{DEFAULT_EXCLUSIONS}, {CACHE_MAX_AGE}, {QUIT_WITH_PENDING}."
     ))
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 fn bad_size(value: &str) -> Error {
@@ -71,15 +80,20 @@ impl Inner {
             return Ok(entries);
         };
         if let Some((account, setting)) = key.rsplit_once(':') {
-            if setting != CACHE_LIMIT {
-                return Err(unknown_key(key));
-            }
             let i = st.resolve(&AccountId::new(account))?;
-            let a = &st.record(i).account;
-            return Ok(vec![entry(
-                format!("{}:{CACHE_LIMIT}", a.display_name),
-                format_size(a.cache_limit),
-            )]);
+            let r = st.record(i);
+            let name = &r.account.display_name;
+            return match setting {
+                CACHE_LIMIT => Ok(vec![entry(
+                    format!("{name}:{CACHE_LIMIT}"),
+                    format_size(r.account.cache_limit),
+                )]),
+                DEFAULT_EXCLUSIONS => Ok(vec![entry(
+                    format!("{name}:{DEFAULT_EXCLUSIONS}"),
+                    on_off(r.default_exclusions),
+                )]),
+                _ => Err(unknown_key(key)),
+            };
         }
         entries
             .into_iter()
@@ -89,6 +103,22 @@ impl Inner {
     }
 
     pub(crate) async fn config_set(&self, key: &str, value: &str) -> Result<Vec<ConfigEntry>> {
+        if let Some((account, DEFAULT_EXCLUSIONS)) = key.rsplit_once(':') {
+            let on = match value {
+                "on" | "true" | "yes" => true,
+                "off" | "false" | "no" => false,
+                _ => {
+                    return Err(Error::InvalidArgument(format!(
+                        "\"{value}\" is not valid for {DEFAULT_EXCLUSIONS}: use on or off."
+                    )));
+                }
+            };
+            let id = AccountId::new(account);
+            // Changing them remounts; uploads pending are no reason to refuse
+            // a setting, they upload after the remount.
+            self.set_default_exclusions(&id, on, true).await?;
+            return self.config_get(Some(key)).await;
+        }
         let mut st = self.state.lock().await;
         let result = if let Some((account, setting)) = key.rsplit_once(':') {
             if setting != CACHE_LIMIT {

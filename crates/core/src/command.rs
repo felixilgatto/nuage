@@ -106,13 +106,19 @@ pub enum Command {
     },
 
     // Exclusions
+    /// Adds an exclusion. The hidden rclone mount is remounted to apply it;
+    /// refused while uploads are pending unless `force`.
     ExcludeAdd {
         account: AccountId,
         rule: ExclusionRule,
+        #[serde(default)]
+        force: bool,
     },
     ExcludeRemove {
         account: AccountId,
         rule: ExclusionRule,
+        #[serde(default)]
+        force: bool,
     },
     ExcludeList {
         account: Option<AccountId>,
@@ -267,6 +273,7 @@ mod tests {
             Command::ExcludeAdd {
                 account: AccountId::new("Drive"),
                 rule: ExclusionRule::Glob("*.tmp".into()),
+                force: false,
             },
         ];
         for command in commands {

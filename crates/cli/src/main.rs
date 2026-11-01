@@ -12,11 +12,12 @@ use clap::Parser;
 use serde_json::json;
 
 use nuage_core::{
-    AccountAddArgs, AccountId, Command, Event, Quota, Reply, StatusReport, SyncState,
+    AccountAddArgs, AccountId, Command, Event, ExclusionRule, Quota, RemotePath, Reply,
+    StatusReport, SyncState,
 };
 use nuage_ipc::{Client, IpcError};
 
-use args::{AccountCommand, Cli, Commands, ConfigCommand, DaemonCommand};
+use args::{AccountCommand, Cli, Commands, ConfigCommand, DaemonCommand, ExcludeCommand};
 
 /// Documented exit codes.
 mod exit {
@@ -234,7 +235,119 @@ async fn run(cli: &Cli) -> Result<(), Failure> {
             );
             Ok(())
         }
+        Commands::Exclude(command) => exclude_command(cli, command).await,
         other => Err(not_implemented(other.name())),
+    }
+}
+
+fn exclusion_rule(
+    account_name: &str,
+    path: &Option<String>,
+    glob: &Option<String>,
+) -> ExclusionRule {
+    match (path, glob) {
+        (_, Some(glob)) => ExclusionRule::Glob(glob.clone()),
+        (Some(path), None) => {
+            ExclusionRule::Path(RemotePath::new(account(account_name), path.clone()))
+        }
+        // clap requires one of them.
+        (None, None) => unreachable!("path or --glob"),
+    }
+}
+
+fn describe_rule(rule: &ExclusionRule) -> String {
+    match rule {
+        ExclusionRule::Path(p) => format!("/{}", p.path),
+        ExclusionRule::Glob(g) => format!("pattern {g}"),
+    }
+}
+
+async fn exclude_command(cli: &Cli, command: &ExcludeCommand) -> Result<(), Failure> {
+    match command {
+        ExcludeCommand::Add {
+            account: name,
+            path,
+            glob,
+            yes,
+        } => {
+            let rule = exclusion_rule(name, path, glob);
+            let what = describe_rule(&rule);
+            request(
+                cli,
+                Command::ExcludeAdd {
+                    account: account(name),
+                    rule,
+                    force: *yes,
+                },
+            )
+            .await?;
+            done(
+                cli,
+                &format!(
+                    "Excluded {what} from \"{name}\": it is no longer downloaded nor uploaded, and stays intact in the cloud."
+                ),
+            );
+            Ok(())
+        }
+        ExcludeCommand::Remove {
+            account: name,
+            path,
+            glob,
+            yes,
+        } => {
+            let rule = exclusion_rule(name, path, glob);
+            let what = describe_rule(&rule);
+            request(
+                cli,
+                Command::ExcludeRemove {
+                    account: account(name),
+                    rule,
+                    force: *yes,
+                },
+            )
+            .await?;
+            done(cli, &format!("{what} of \"{name}\" is synchronised again."));
+            Ok(())
+        }
+        ExcludeCommand::List { account: name } => {
+            let Reply::Exclusions(list) = request(
+                cli,
+                Command::ExcludeList {
+                    account: name.as_deref().map(account),
+                },
+            )
+            .await?
+            else {
+                return Err(unexpected());
+            };
+            if cli.json {
+                print_json(&list);
+                return Ok(());
+            }
+            let accounts = match request(cli, Command::AccountList).await? {
+                Reply::Accounts(a) => a,
+                _ => return Err(unexpected()),
+            };
+            let name_of = |id: &AccountId| {
+                accounts
+                    .iter()
+                    .find(|a| &a.id == id)
+                    .map_or_else(|| id.to_string(), |a| a.display_name.clone())
+            };
+            if list.is_empty() {
+                println!("Nothing is excluded.");
+            }
+            let mut current = None;
+            for e in &list {
+                if current != Some(&e.account) {
+                    println!("{}:", name_of(&e.account));
+                    current = Some(&e.account);
+                }
+                let note = if e.default { "  (default)" } else { "" };
+                println!("  {}{note}", describe_rule(&e.rule));
+            }
+            Ok(())
+        }
     }
 }
 
