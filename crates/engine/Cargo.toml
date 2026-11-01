@@ -16,6 +16,7 @@ gdrive = ["nuage-providers/gdrive"]
 
 [dependencies]
 nuage-core.workspace = true
+nuage-fs.workspace = true
 nuage-providers.workspace = true
 nuage-rclone.workspace = true
 serde.workspace = true

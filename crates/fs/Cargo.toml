@@ -1,6 +1,6 @@
 [package]
 name = "nuage-fs"
-description = "Nuage overlay FUSE filesystem: relay to rclone, local exclusions, offline pinning (placeholder)"
+description = "Nuage overlay FUSE filesystem: relay to rclone, local exclusions, offline pinning"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,15 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+fuser.workspace = true
+libc.workspace = true
+rustix = { workspace = true, features = ["net"] }
+tracing.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
+rustix.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

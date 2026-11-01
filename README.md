@@ -134,8 +134,16 @@ A step-by-step guide (Google Cloud project, Drive API, consent screen in
 ## Flatpak permissions *(planned)*
 
 Each permission and its reason will be listed here, in particular
-`--talk-name=org.freedesktop.Flatpak` (used only to mount with the host's
-`fusermount3`) and `--filesystem=home` (mount folders anywhere in your home).
+`--talk-name=org.freedesktop.Flatpak` and `--filesystem=home`.
+
+- `--talk-name=org.freedesktop.Flatpak` lets the app run programs on your
+  computer outside the sandbox. Nuage uses it for one thing only: mounting
+  and unmounting your folders with your system's `fusermount3`, through a
+  small helper shipped with the app (`nuage-fuse-relay`). Nothing else runs
+  outside the sandbox.
+- `--filesystem=home` lets you choose any folder in your home as a mount
+  folder: the folder must have the same path inside and outside the
+  sandbox.
 
 ## Offline mode *(planned, v1.1)*
 

@@ -33,3 +33,29 @@ flatpak run io.github.felixilgatto.NuagePoc mount gdrive: ~/Cloud/nuage-poc-driv
 ```
 
 Then open `~/Cloud/nuage-poc-drive` in Nautilus.
+
+## Milestone 4 check: nuaged in the sandbox
+
+`io.github.felixilgatto.NuagePoc.m4.yml` packages `nuaged`, `nuage`, the production wrapper
+(`build-aux/flatpak/fusermount-wrapper.sh`) and a static `nuage-fuse-relay`. Stage the binaries, then build:
+
+```sh
+RUSTFLAGS="-C target-feature=+crt-static" cargo build --release -p nuage-fuse-relay --target x86_64-unknown-linux-gnu
+# nuaged and nuage in the GNOME SDK (see the main README), into target/flatpak-sdk
+mkdir -p m4-stage && cp ../../build-aux/flatpak/fusermount-wrapper.sh \
+    ../../target/x86_64-unknown-linux-gnu/release/nuage-fuse-relay \
+    ../../target/flatpak-sdk/release/{nuaged,nuage} m4-stage/
+flatpak run org.flatpak.Builder --user --install --force-clean --disable-rofiles-fuse \
+    build-dir io.github.felixilgatto.NuagePoc.m4.yml
+```
+
+Run the daemon in the sandbox and drive it from the host:
+
+```sh
+export NUAGE_SOCKET=/run/user/$(id -u)/app/io.github.felixilgatto.NuagePoc/nuaged.sock
+flatpak run --env=NUAGE_SOCKET=$NUAGE_SOCKET io.github.felixilgatto.NuagePoc &
+mkdir -p ~/.cache/nuage-m4/src && echo hello > ~/.cache/nuage-m4/src/hello.txt
+nuage account add local --name M4 --mount-point ~/.cache/nuage-m4/mnt --param root=$HOME/.cache/nuage-m4/src
+cat ~/.cache/nuage-m4/mnt/hello.txt
+nuage account remove M4 --yes && nuage daemon stop --now
+```

@@ -1,0 +1,30 @@
+[package]
+name = "nuage-fuse-relay"
+description = "Host-side relay that mounts FUSE filesystems for the Nuage Flatpak"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "nuage-fuse-relay"
+path = "src/main.rs"
+
+[dependencies]
+rustix = { workspace = true, features = ["net", "fs"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# The workspace forbids unsafe code. Adopting the socket inherited through
+# `_FUSE_COMMFD` needs one `unsafe` block (an fd number to an `OwnedFd`), so
+# this crate denies it instead and allows it in that single place.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

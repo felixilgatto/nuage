@@ -1,0 +1,32 @@
+# Milestone 4 check: nuaged inside the sandbox, rclone and nuage-fs mounting
+# through build-aux/flatpak/fusermount-wrapper.sh and nuage-fuse-relay.
+# Throwaway; binaries are staged in m4-stage/ (see README).
+app-id: io.github.felixilgatto.NuagePoc
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: nuaged
+finish-args:
+  - --share=network
+  - --talk-name=org.freedesktop.Flatpak # fusermount3 wrapper only
+  - --filesystem=home                   # mount points chosen freely under $HOME
+modules:
+  - name: rclone
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 rclone /app/bin/rclone
+    sources:
+      - type: archive
+        url: https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip
+        sha256: 349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
+
+  - name: nuage
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 fusermount-wrapper.sh /app/bin/fusermount3
+      - install -Dm755 nuage-fuse-relay /app/bin/nuage-fuse-relay
+      - install -Dm755 nuaged /app/bin/nuaged
+      - install -Dm755 nuage /app/bin/nuage
+    sources:
+      - type: dir
+        path: m4-stage

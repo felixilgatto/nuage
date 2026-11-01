@@ -18,6 +18,7 @@ declare -A ALLOWED=(
     [nuage-providers]="nuage-core"
     [nuage-rclone]="nuage-core"
     [nuage-fs]="nuage-core"
+    [nuage-fuse-relay]=""
     [nuage-engine]="nuage-core nuage-rclone nuage-providers nuage-fs"
     [nuaged]="nuage-engine nuage-ipc nuage-core"
     [nuage]="nuage-core nuage-ipc"

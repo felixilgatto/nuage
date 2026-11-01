@@ -13,13 +13,8 @@ use crate::{Inner, Paths, State};
 /// own; `UploadControl` releases them unless the account is paused.
 pub const HOLD_WRITE_BACK: &str = "8760h";
 
-/// Where an account is mounted.
-///
-/// `nuage-fs` is mounted at the user's folder, on top of a hidden rclone
-/// mount (`data/mounts/<account>`). Until `nuage-fs` exists, rclone mounts
-/// directly at the user's folder ([`MountPlan::direct`]). Keeping both paths
-/// apart means neither the account configuration nor the interfaces change
-/// when `nuage-fs` arrives.
+/// Where an account is mounted: `nuage-fs` at the user's folder, on top of
+/// a hidden rclone mount (`data/mounts/<account id>`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountPlan {
     pub account: AccountId,
@@ -30,12 +25,11 @@ pub struct MountPlan {
 }
 
 impl MountPlan {
-    /// Interim plan without `nuage-fs`: rclone mounts at the user's folder.
-    pub fn direct(account: &Account) -> Self {
+    pub fn layered(account: &Account, paths: &Paths) -> Self {
         Self {
             account: account.id.clone(),
             user_mount_point: account.mount_point.clone(),
-            rclone_mount_point: account.mount_point.clone(),
+            rclone_mount_point: paths.hidden_mounts().join(account.id.as_str()),
         }
     }
 }
@@ -307,7 +301,10 @@ impl Inner {
         self.unmount_locked(&mut st, &account).await
     }
 
-    /// Mounts account `i`; does nothing if it is already mounted.
+    /// Mounts account `i` (both layers); does nothing if it is mounted.
+    ///
+    /// If `nuage-fs` is still mounted at the user's folder (rclone was
+    /// restarted), only the hidden rclone mount is mounted again.
     pub(crate) async fn mount_locked(&self, st: &mut State, i: usize) -> Result<()> {
         let account = st.record(i).account.clone();
         if st.is_mounted(&account.id) {
@@ -320,6 +317,9 @@ impl Inner {
                 runtime.mounted = Some(plan.clone());
                 runtime.mount_error = None;
                 runtime.quota_at = None;
+                if let Some(fs) = &runtime.fs {
+                    fs.set_available(true);
+                }
                 self.emit(Event::MountChanged {
                     account: account.id.clone(),
                     mounted: true,
@@ -339,13 +339,16 @@ impl Inner {
             ))
         })?;
         let rc = self.rc().await?;
-        let plan = MountPlan::direct(account);
-        let target = &plan.rclone_mount_point;
-        if fuse_mounts().contains(target) {
-            tracing::info!(path = %target.display(), "detaching a stale mount");
-            force_unmount(target).await?;
+        let plan = MountPlan::layered(account, &self.paths);
+        let kernel = fuse_mounts();
+
+        // Hidden rclone mount.
+        let hidden = &plan.rclone_mount_point;
+        if kernel.contains(hidden) {
+            tracing::info!(path = %hidden.display(), "detaching a stale mount");
+            force_unmount(hidden).await?;
         }
-        std::fs::create_dir_all(target)?;
+        std::fs::create_dir_all(hidden)?;
         let request = mount_request(
             account,
             &plan,
@@ -355,6 +358,45 @@ impl Inner {
         rc.mount(&request)
             .await
             .map_err(|e| Error::Rclone(mount_error(account, &e)))?;
+
+        // nuage-fs at the user's folder, unless it is still there.
+        if st.runtime(&account.id).fs.is_none() {
+            let user = plan.user_mount_point.clone();
+            if kernel.contains(&user) {
+                tracing::info!(path = %user.display(), "detaching a stale mount");
+                force_unmount(&user).await?;
+            }
+            let mounted = match check_empty(account, &user) {
+                Ok(()) => {
+                    let backing = hidden.clone();
+                    let config = nuage_fs::MountConfig {
+                        name: account.remote_name.clone(),
+                        ..nuage_fs::MountConfig::default()
+                    };
+                    tokio::task::spawn_blocking(move || nuage_fs::mount(&backing, &user, &config))
+                        .await
+                        .map_err(|e| Error::Internal(e.to_string()))?
+                        .map_err(|e| {
+                            Error::Io(format!(
+                                "Cannot mount \"{}\" at {}: {e}",
+                                account.display_name,
+                                plan.user_mount_point.display()
+                            ))
+                        })
+                }
+                Err(e) => Err(e),
+            };
+            match mounted {
+                Ok(fs) => st.runtime(&account.id).fs = Some(fs),
+                Err(e) => {
+                    // Do not leave the hidden mount behind.
+                    if let Err(u) = rc.unmount(path_str(hidden)?).await {
+                        tracing::warn!(error = %u, "cannot unmount the hidden mount");
+                    }
+                    return Err(e);
+                }
+            }
+        }
 
         let mut caps = provider.static_capabilities();
         match rc.fsinfo(&request.fs).await {
@@ -367,26 +409,43 @@ impl Inner {
         Ok(plan)
     }
 
-    /// Unmounts an account if it is mounted. Writes not uploaded yet stay in
+    /// Unmounts both layers of an account. Writes not uploaded yet stay in
     /// the cache and are queued again at the next mount.
     pub(crate) async fn unmount_locked(&self, st: &mut State, account: &Account) -> Result<()> {
-        let Some(plan) = st.runtime(&account.id).mounted.clone() else {
+        let runtime = st.runtime(&account.id);
+        let fs = runtime.fs.take();
+        let plan = runtime.mounted.take();
+        if fs.is_none() && plan.is_none() {
             return Ok(());
-        };
-        let path = path_str(&plan.rclone_mount_point)?.to_owned();
-        let result = match self.rc().await {
-            Ok(rc) => rc.unmount(&path).await.map_err(|e| e.to_string()),
-            Err(e) => Err(e.to_string()),
-        };
-        if let Err(e) = result {
-            if fuse_mounts().contains(&plan.rclone_mount_point) {
-                tracing::warn!(error = %e, "mount/unmount failed, detaching");
-                force_unmount(&plan.rclone_mount_point).await?;
+        }
+        // The user's folder first: nothing reaches the hidden mount anymore.
+        if let Some(fs) = fs {
+            let at = fs.mount_point().to_owned();
+            let result = tokio::task::spawn_blocking(move || fs.unmount())
+                .await
+                .map_err(|e| Error::Internal(e.to_string()))?;
+            if let Err(e) = result {
+                tracing::warn!(error = %e, path = %at.display(), "unmounting nuage-fs failed, detaching");
+                if fuse_mounts().contains(&at) {
+                    force_unmount(&at).await?;
+                }
             }
         }
-        let runtime = st.runtime(&account.id);
-        runtime.mounted = None;
-        runtime.disk_cache = None;
+        let hidden = MountPlan::layered(account, &self.paths).rclone_mount_point;
+        let result = match self.rc().await {
+            Ok(rc) => rc
+                .unmount(path_str(&hidden)?)
+                .await
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = result
+            && fuse_mounts().contains(&hidden)
+        {
+            tracing::warn!(error = %e, "mount/unmount failed, detaching");
+            force_unmount(&hidden).await?;
+        }
+        st.runtime(&account.id).disk_cache = None;
         self.emit(Event::MountChanged {
             account: account.id.clone(),
             mounted: false,
@@ -395,17 +454,34 @@ impl Inner {
         Ok(())
     }
 
+    /// rclone stopped: the hidden mounts are gone. `nuage-fs` stays mounted
+    /// and makes requests wait until [`remount_all`](Self::remount_all).
+    pub(crate) fn hidden_mounts_lost(&self, st: &mut State) {
+        for runtime in st.runtime.values_mut() {
+            runtime.mounted = None;
+            if let Some(fs) = &runtime.fs {
+                fs.set_available(false);
+            }
+        }
+    }
+
     /// Detaches mounts left by a crash, then mounts every account marked
     /// for it. Failures are recorded per account, not returned.
     pub(crate) async fn remount_all(&self) {
         let mut st = self.state.lock().await;
         let kernel = fuse_mounts();
+        // The user's folders still served by this daemon are not orphans.
+        let ours: Vec<PathBuf> = st
+            .runtime
+            .values()
+            .filter_map(|r| r.fs.as_ref().map(|fs| fs.mount_point().to_owned()))
+            .collect();
         let mut stale: Vec<PathBuf> = st
             .config
             .accounts
             .iter()
-            .map(|r| MountPlan::direct(&r.account).rclone_mount_point)
-            .filter(|p| kernel.contains(p))
+            .map(|r| r.account.mount_point.clone())
+            .filter(|p| kernel.contains(p) && !ours.contains(p))
             .collect();
         let hidden = self.paths.hidden_mounts();
         stale.extend(kernel.iter().filter(|p| p.starts_with(&hidden)).cloned());
@@ -422,7 +498,7 @@ impl Inner {
             if st.record(i).auto_mount
                 && let Err(e) = self.mount_locked(&mut st, i).await
             {
-                tracing::warn!(error = %e, "mount at startup failed");
+                tracing::warn!(error = %e, "mount failed");
             }
         }
     }
@@ -441,6 +517,21 @@ impl Inner {
             }
         }
     }
+}
+
+/// The user's folder must be empty when `nuage-fs` mounts over it, or its
+/// content would be hidden.
+fn check_empty(account: &Account, path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)?;
+    if std::fs::read_dir(path)?.next().is_some() {
+        return Err(Error::InvalidArgument(format!(
+            "Cannot mount \"{}\": the folder {} is not empty. Move its content elsewhere, then run `nuage mount \"{}\"`.",
+            account.display_name,
+            path.display(),
+            account.display_name
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -523,11 +614,13 @@ mod tests {
     #[test]
     fn request_shape() {
         let a = account("Drive", "/home/me/Cloud/Drive");
-        let plan = MountPlan::direct(&a);
+        let paths = Paths::under(Path::new("/data"));
+        let plan = MountPlan::layered(&a, &paths);
+        assert_eq!(plan.user_mount_point, Path::new("/home/me/Cloud/Drive"));
         let req = mount_request(&a, &plan, &VfsOptions::default(), Some(3600)).unwrap();
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["fs"], "nuage-Drive:");
-        assert_eq!(json["mountPoint"], "/home/me/Cloud/Drive");
+        assert_eq!(json["mountPoint"], "/data/data/mounts/Drive");
         assert_eq!(json["vfsOpt"]["CacheMode"], "full");
         assert_eq!(json["vfsOpt"]["CacheMaxSize"], 1u64 << 30);
         assert_eq!(json["vfsOpt"]["CacheMaxAge"], "3600s");

@@ -111,7 +111,11 @@ pub(crate) struct State {
 /// What the engine knows about an account while it runs.
 #[derive(Debug, Default)]
 pub(crate) struct Runtime {
+    /// Both layers are mounted.
     mounted: Option<MountPlan>,
+    /// `nuage-fs` at the user's folder. It outlives the hidden rclone mount
+    /// when rclone is restarted.
+    fs: Option<nuage_fs::MountedFs>,
     /// Why the last mount attempt failed.
     mount_error: Option<String>,
     capabilities: Option<Capabilities>,
@@ -419,9 +423,8 @@ impl Inner {
             rcd.client = None;
             drop(rcd);
             let mut st = self.state.lock().await;
-            for runtime in st.runtime.values_mut() {
-                runtime.mounted = None;
-            }
+            self.hidden_mounts_lost(&mut st);
+            drop(st);
             rcd = self.rcd.lock().await;
         }
         if rcd.client.is_some()

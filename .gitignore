@@ -9,3 +9,6 @@
 /build-dir/
 /repo/
 *.flatpak
+
+# Milestone 4 Flatpak check (poc/flatpak-fuse)
+m4-stage/

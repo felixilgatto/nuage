@@ -4,7 +4,8 @@
 //! Needs a non-snap rclone (`NUAGE_RCLONE` or `rclone` in `PATH`),
 //! `/dev/fuse` and `fusermount3`. Without them the tests are skipped, unless
 //! `NUAGE_E2E_REQUIRED=1` (set in CI), which turns a skip into a failure.
-//! `nuaged` must be built (`cargo test --workspace` builds it).
+//! `nuaged` must be built and up to date: `cargo test --workspace`, or
+//! `cargo test -p nuaged -p nuage` (`-p nuage` alone does not rebuild it).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -272,6 +273,20 @@ fn fuse_mounted(path: &Path) -> bool {
     })
 }
 
+/// Filesystem type of the mount at `path` (`fuse.nuage`, `fuse.rclone`…).
+fn mount_type(path: &Path) -> Option<String> {
+    let info = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+    let wanted = path.to_str().unwrap().replace(' ', "\\040");
+    info.lines().find_map(|l| {
+        let fields: Vec<&str> = l.split(' ').collect();
+        if fields.get(4) != Some(&wanted.as_str()) {
+            return None;
+        }
+        let sep = fields.iter().position(|f| *f == "-")?;
+        fields.get(sep + 1).map(|t| t.to_string())
+    })
+}
+
 impl Drop for TestEnv {
     fn drop(&mut self) {
         if let Some(mut child) = self.daemon.take() {
@@ -326,6 +341,13 @@ fn account_lifecycle() {
     let mount = env.path("home/Cloud/Local folder");
     assert_eq!(account["mount_point"], mount.to_str().unwrap());
     assert!(fuse_mounted(&mount));
+    // nuage-fs at the user's folder, rclone at the hidden folder.
+    assert_eq!(mount_type(&mount).as_deref(), Some("fuse.nuage"));
+    let hidden = env.path(&format!(
+        "home/.local/share/nuage/mounts/{}",
+        account["id"].as_str().unwrap()
+    ));
+    assert_eq!(mount_type(&hidden).as_deref(), Some("fuse.rclone"));
 
     // Same provider again: suffixed name.
     let (_, other_mount) = (env.path("src2"), env.path("home/elsewhere"));
@@ -537,4 +559,39 @@ fn errors_and_settings() {
         env.account_state("Data")["account"]["cache_limit"],
         1u64 << 30
     );
+}
+
+#[test]
+fn user_folder_survives_an_rclone_crash() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let (src, mount) = env.add_local("Survivor");
+    // Written through the mount: rclone does not see changes made behind
+    // its back in the source folder until its directory cache expires.
+    std::fs::write(mount.join("a.txt"), "a").unwrap();
+    env.wait_until("a.txt is uploaded", Duration::from_secs(20), |_| {
+        std::fs::read_to_string(src.join("a.txt")).is_ok_and(|s| s == "a")
+    });
+
+    let pid = std::fs::read_to_string(env.path("home/.local/share/nuage/rcd.pid")).unwrap();
+    let killed = Command::new("kill")
+        .args(["-9", pid.trim()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+
+    // The folder never disappears; reads wait for rclone to come back.
+    assert_eq!(mount_type(&mount).as_deref(), Some("fuse.nuage"));
+    let start = Instant::now();
+    assert_eq!(std::fs::read_to_string(mount.join("a.txt")).unwrap(), "a");
+    assert!(start.elapsed() < Duration::from_secs(20));
+    env.wait_until(
+        "the account is mounted again",
+        Duration::from_secs(20),
+        |env| env.account_state("Survivor")["mounted"] == true,
+    );
+    std::fs::write(mount.join("b.txt"), "b").unwrap();
+    env.wait_until("b.txt is uploaded", Duration::from_secs(20), |_| {
+        std::fs::read_to_string(src.join("b.txt")).is_ok_and(|s| s == "b")
+    });
 }

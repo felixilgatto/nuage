@@ -5,10 +5,10 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 3. The daemon supervises rclone, mounts accounts,
-> pauses uploads and reports the status; the CLI drives all of it. File
-> operations, exclusions, Google sign-in and pinning still return
-> `not_implemented`.
+> Status: milestone 4. The daemon supervises rclone, mounts each account
+> in two layers (`nuage-fs` over a hidden rclone mount), pauses uploads and
+> reports the status; the CLI drives all of it. File operations,
+> exclusions, Google sign-in and pinning still return `not_implemented`.
 
 ## Processes
 
@@ -35,7 +35,8 @@ nuaged  (daemon: engine + rclone rcd)
 | `crates/rclone-rc` | `nuage-rclone` | typed rc client, `RcdSupervisor` |
 | `crates/providers` | `nuage-providers` | `Provider` trait, `ProviderRegistry`, one module and Cargo feature per provider |
 | `crates/engine` | `nuage-engine` | accounts, mounts, uploads, exclusions, status, files, pins |
-| `crates/fs` | `nuage-fs` | overlay FUSE filesystem (placeholder) |
+| `crates/fs` | `nuage-fs` | overlay FUSE filesystem: relay to the hidden rclone mount |
+| `crates/fuse-relay` | `nuage-fuse-relay` | binary run on the host by the Flatpak's `fusermount3` wrapper |
 | `crates/daemon` | `nuaged` | binary: engine + IPC server |
 | `crates/cli` | `nuage` | binary: CLI (clap), IPC client |
 | `crates/tray` | `nuage-tray` | StatusNotifierItem icon (ksni) |
@@ -54,6 +55,7 @@ Checked in CI by `scripts/check-deps.sh`:
 | `daemon` | `engine`, `ipc`, `core` |
 | `cli`, `ui`, `tray` | `core`, `ipc` — never `engine` or `rclone-rc` |
 | `gtk` | `core`, `ipc`, `ui`, `tray` |
+| `fuse-relay` | no project crate |
 
 `nuaged` and `nuage` must not pull any GTK crate (checked with `cargo tree`),
 so the headless package installs on a bare server.
@@ -93,10 +95,56 @@ adding a module and a Cargo feature in `providers`, without touching
   with `SIGKILL` is stopped at the next start, then any FUSE mount still
   present at an account folder is detached (`fusermount3 -u -z`).
 - If rcd dies, the engine restarts it (at most every 5 s) and remounts.
-- Mounts: `nuage-fs` at the user's folder over a hidden rclone mount;
-  `MountPlan` keeps the two paths apart so the account configuration does
-  not change when `nuage-fs` lands. Until milestone 4, rclone mounts
-  directly at the user's folder.
+- Mounts: see [Mounts](#mounts).
+
+## Mounts
+
+```
+~/Cloud/Google Drive            ← nuage-fs (fuse.nuage), served by nuaged
+   └─ everything                → relayed to the hidden rclone mount
+data/mounts/<account id>        ← rclone (fuse.rclone), VFS cache, write-back
+```
+
+- `MountPlan::layered` gives both paths. Mounting does rclone first, then
+  `nuage-fs`; unmounting does `nuage-fs` first, then rclone.
+- `nuage-fs` (`crates/fs`, on `fuser`) gives out its own inode numbers,
+  mapped to paths relative to the hidden mount, and relays every operation
+  to it. It is served by 8 threads, so a slow read (rclone downloading) does
+  not block listings or other files.
+- **If rclone dies**, the user's folder stays mounted. The engine closes
+  `nuage-fs`'s gate: requests wait (up to 10 s) instead of seeing an empty
+  folder. Errors of the dead mount (`ENOTCONN`, `ECONNABORTED`) are retried
+  the same way, and files open at that moment are reopened by path. Once
+  rcd is restarted and the hidden mount is back, the gate opens again.
+- Both layers mount through `fusermount3` with the `_FUSE_COMMFD` socket,
+  as rclone does (`fuser` would open `/dev/fuse` directly, which the
+  sandbox does not allow). The threads share one `/dev/fuse` descriptor for
+  the same reason.
+- Orphans: a `SIGKILL`ed daemon leaves `fuse.nuage` and `fuse.rclone`
+  mounts; the next start detaches them, except user folders it still serves.
+
+### Flatpak: mounting from the sandbox
+
+The sandbox has neither `fusermount3` nor the right to mount.
+`/app/bin/fusermount3` is `build-aux/flatpak/fusermount-wrapper.sh`:
+
+1. libfuse (rclone) or `nuage-fs` run it with a socket in `$_FUSE_COMMFD`.
+2. It runs `nuage-fuse-relay` on the host with `flatpak-spawn --host
+   --forward-fd`, from the application's host path (`app-path` in
+   `/.flatpak-info`).
+3. The relay creates its own socket pair, runs the host's `fusermount3`
+   with it (Ubuntu 26.04's AppArmor profile refuses sockets inherited from
+   the sandbox), receives the `/dev/fuse` descriptor and passes it back on
+   the forwarded socket.
+
+Unmounts go straight to the host's `fusermount3`. The relay is built as a
+static executable: it runs on the host, whose glibc may be older than the
+runtime's. It refuses to run itself in a loop (a wrapper found again in
+`PATH`).
+
+The mounts made by the host propagate into the sandbox, so `nuage-fs` in
+the sandbox reads the hidden rclone mount, and host applications see the
+user's folder.
 
 ## Engine
 
@@ -159,8 +207,16 @@ and are queued again at the next mount.
 ## Tests
 
 - Unit tests in each crate.
+- `crates/fs/tests/fs_suite.rs`: `nuage-fs` over a plain folder: read,
+  write, append, truncate, large files, seeks, directories with 1000
+  entries, rename (with children, over a file, `RENAME_NOREPLACE`,
+  `RENAME_EXCHANGE`, open files), deletion of open files, attributes,
+  links, `statfs`, concurrent access, waiting for and timing out on an
+  unavailable backing folder.
+- `crates/fuse-relay/tests/relay.rs`: a real rclone mount through the relay.
 - `crates/cli/tests/e2e.rs`: real `nuaged` and `nuage` processes, a real
   rclone and FUSE, the `local` provider, an isolated home. Covers adding,
-  renaming, mounting, unmounting, removing accounts, pause across restarts,
-  recovery after `SIGKILL`, settings and error codes. CI installs the
+  renaming, mounting (both layers), unmounting, removing accounts, pause
+  across restarts, recovery after `SIGKILL` of the daemon, the user's
+  folder surviving `SIGKILL` of rclone, settings and error codes. CI installs the
   pinned rclone and `fuse3` and sets `NUAGE_E2E_REQUIRED=1`.

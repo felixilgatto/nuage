@@ -204,6 +204,9 @@ impl Inner {
             let _ = self.save(&st);
             let _ = rc.config_delete(&account.remote_name).await;
             let _ = std::fs::remove_dir(&account.mount_point);
+            let _ = std::fs::remove_dir(
+                crate::MountPlan::layered(&account, &self.paths).rclone_mount_point,
+            );
             return Err(e);
         }
         tracing::info!(account = %account.display_name, provider = %account.provider_id, "account added");
@@ -320,6 +323,9 @@ impl Inner {
         }
         // Only removed if empty: never delete user files.
         let _ = std::fs::remove_dir(&account.mount_point);
+        let _ = std::fs::remove_dir(
+            crate::MountPlan::layered(&account, &self.paths).rclone_mount_point,
+        );
         tracing::info!(account = %account.display_name, fs = %remote_fs(&account), "account removed");
         self.emit(Event::AccountRemoved {
             account: account.id.clone(),
