@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="images/social-preview.png" alt="Nuage: your cloud files, simply on Linux." width="720">
-</p>
+![Nuage: your cloud files, simply on Linux.](images/social-preview.png)
 
 [![CI](https://github.com/felixilgatto/nuage/actions/workflows/ci.yml/badge.svg)](https://github.com/felixilgatto/nuage/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
