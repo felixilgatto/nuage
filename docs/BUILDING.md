@@ -131,3 +131,5 @@ NUAGE_E2E_REQUIRED=1 cargo test
 scripts/check-deps.sh
 cargo deny check
 ```
+
+Publishing on Flathub: see [FLATHUB.md](FLATHUB.md).
