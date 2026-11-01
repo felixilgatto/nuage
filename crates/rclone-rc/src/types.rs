@@ -56,6 +56,26 @@ impl ConfigOutcome {
     pub fn pending_question(&self) -> Option<&str> {
         self.option.as_ref()?.get("Name")?.as_str()
     }
+
+    /// What rclone proposes for the pending question: its default, or else
+    /// its first choice (e.g. the only OneDrive of a personal account).
+    pub fn proposed_answer(&self) -> Option<String> {
+        let option = self.option.as_ref()?;
+        let default = option
+            .get("Default")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty());
+        let first = || {
+            option
+                .get("Examples")?
+                .as_array()?
+                .first()?
+                .get("Value")?
+                .as_str()
+                .filter(|v| !v.is_empty())
+        };
+        default.or_else(first).map(str::to_owned)
+    }
 }
 
 /// What [`RcClient::config_continue`](crate::RcClient::config_continue)
@@ -264,4 +284,32 @@ pub struct JobStatus {
     pub error: String,
     #[serde(default)]
     pub output: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(option: serde_json::Value) -> ConfigOutcome {
+        ConfigOutcome {
+            state: "s".into(),
+            option: Some(option),
+            ..ConfigOutcome::default()
+        }
+    }
+
+    #[test]
+    fn proposed_answer() {
+        // rclone's OneDrive drive choice (fs.ConfigChoose): no default.
+        let choose = outcome(serde_json::json!({
+            "Name": "config_driveid",
+            "Default": "",
+            "Examples": [{"Value": "b!abc", "Help": "OneDrive (personal)"}, {"Value": "b!def"}],
+        }));
+        assert_eq!(choose.proposed_answer().as_deref(), Some("b!abc"));
+        let default = outcome(serde_json::json!({"Name": "q", "Default": "true"}));
+        assert_eq!(default.proposed_answer().as_deref(), Some("true"));
+        let none = outcome(serde_json::json!({"Name": "q", "Default": ""}));
+        assert_eq!(none.proposed_answer(), None);
+    }
 }

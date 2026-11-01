@@ -281,18 +281,29 @@ impl Inner {
                     break;
                 }
                 let question = outcome.pending_question().unwrap_or_default().to_owned();
-                let Some((_, answer)) = pending.answers.iter().find(|(k, _)| *k == question) else {
-                    failure = Some(Error::Rclone(format!(
-                        "rclone still asks \"{question}\" after the sign-in."
-                    )));
-                    break;
+                // Our answer, or else what rclone proposes (e.g. which
+                // OneDrive drive: a personal account has one).
+                let answer = match pending.answers.iter().find(|(k, _)| *k == question) {
+                    Some((_, answer)) => answer.clone(),
+                    None => match outcome.proposed_answer() {
+                        Some(answer) => {
+                            tracing::info!(%question, %answer, "taking rclone's proposal");
+                            answer
+                        }
+                        None => {
+                            failure = Some(Error::Rclone(format!(
+                                "rclone still asks \"{question}\" after the sign-in."
+                            )));
+                            break;
+                        }
+                    },
                 };
                 tracing::debug!(%question, "answering rclone");
                 match rc
                     .config_continue(
                         &pending.remote_name,
                         &outcome.state,
-                        answer,
+                        &answer,
                         false,
                         serde_json::json!({}),
                     )
