@@ -79,6 +79,8 @@ struct TestEnv {
     rclone: PathBuf,
     nuaged: PathBuf,
     daemon: Option<Child>,
+    /// More environment for the daemon and the CLI.
+    extra_env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 impl TestEnv {
@@ -94,6 +96,7 @@ impl TestEnv {
             rclone,
             nuaged: nuaged_binary(),
             daemon: None,
+            extra_env: Vec::new(),
         }
     }
 
@@ -117,6 +120,9 @@ impl TestEnv {
             // Never touch the keyring of the user running the tests.
             .env("NUAGE_KEYRING", "off")
             .env_remove("FLATPAK_ID");
+        for (k, v) in &self.extra_env {
+            cmd.env(k, v);
+        }
     }
 
     fn start_daemon(&mut self) {
@@ -1081,4 +1087,225 @@ fn cache_settings_apply_to_mounted_accounts() {
         env.json(&["config", "get", "Cached:cache-max-age"])["Cached:cache-max-age"],
         "2w"
     );
+}
+
+/// The account's pin store, where pinned items are kept.
+fn pin_store(env: &TestEnv, name: &str) -> PathBuf {
+    let list = env.json(&["account", "list"]);
+    let id = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["display_name"] == name)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    env.path(&format!("home/.local/share/nuage/pins/{id}"))
+}
+
+fn pin_state(env: &TestEnv, path: &str) -> String {
+    let pins = env.json(&["pin", "list"]);
+    pins.as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["path"] == path)
+        .map(|p| p["state"].as_str().unwrap().to_owned())
+        .unwrap_or_default()
+}
+
+#[test]
+fn offline_pinning() {
+    let mut env = env_or_skip!();
+    // While this file exists, the daemon behaves as if the network is gone.
+    let offline_flag = env.path("offline");
+    env.extra_env
+        .push(("NUAGE_TEST_OFFLINE".into(), offline_flag.clone().into()));
+    env.start_daemon();
+    env.json(&["config", "set", "offline-check-interval", "1s"]);
+    let src = env.path("src-Pins");
+    for dir in ["Passwords", "Work/sub", "Misc"] {
+        std::fs::create_dir_all(src.join(dir)).unwrap();
+    }
+    std::fs::write(src.join("Passwords/db.kdbx"), "v1").unwrap();
+    std::fs::write(src.join("Work/a.txt"), "a").unwrap();
+    std::fs::write(src.join("Work/sub/b.txt"), "b").unwrap();
+    std::fs::write(src.join("Misc/c.txt"), "c").unwrap();
+    std::fs::write(src.join("big.bin"), "big").unwrap();
+    let (_, mount) = env.add_local("Pins");
+    let store = pin_store(&env, "Pins");
+
+    // Pinning downloads the copies before answering.
+    env.json(&["pin", "add", "Pins:Passwords/db.kdbx"]);
+    env.json(&["pin", "add", "Pins:Work"]);
+    assert_eq!(
+        std::fs::read_to_string(store.join("Passwords/db.kdbx")).unwrap(),
+        "v1"
+    );
+    assert_eq!(
+        std::fs::read_to_string(store.join("Work/sub/b.txt")).unwrap(),
+        "b"
+    );
+    assert_eq!(pin_state(&env, "Work"), "available");
+    assert_eq!(
+        env.json_error(&["pin", "add", "Pins:Work/a.txt"], 1),
+        "already_exists"
+    );
+    assert_eq!(env.json_error(&["pin", "add", "Pins:nope"], 1), "not_found");
+    let text = String::from_utf8_lossy(&env.nuage(&["pin", "list"]).stdout).to_string();
+    assert!(
+        text.contains("Pins:Work/") && text.contains("available offline"),
+        "{text}"
+    );
+
+    // Saved like KeePassXC does: a temporary file renamed over the database.
+    std::fs::write(mount.join("Passwords/db.kdbx.Ab12Cd"), "v2").unwrap();
+    std::fs::rename(
+        mount.join("Passwords/db.kdbx.Ab12Cd"),
+        mount.join("Passwords/db.kdbx"),
+    )
+    .unwrap();
+    env.wait_until("the database is uploaded", Duration::from_secs(30), |_| {
+        std::fs::read_to_string(src.join("Passwords/db.kdbx")).is_ok_and(|s| s == "v2")
+    });
+    assert!(!src.join("Passwords/db.kdbx.Ab12Cd").exists());
+
+    // Remote changes and new remote files come down.
+    std::fs::write(src.join("Work/a.txt"), "a, changed remotely").unwrap();
+    std::fs::write(src.join("Work/new.txt"), "new").unwrap();
+    env.wait_until(
+        "remote changes are downloaded",
+        Duration::from_secs(30),
+        |_| {
+            std::fs::read_to_string(store.join("Work/a.txt"))
+                .is_ok_and(|s| s == "a, changed remotely")
+                && store.join("Work/new.txt").exists()
+        },
+    );
+    assert_eq!(
+        std::fs::read_to_string(mount.join("Work/new.txt")).unwrap(),
+        "new"
+    );
+
+    // Offline: pinned items work, others are listed and fail at once.
+    std::fs::write(&offline_flag, "").unwrap();
+    env.wait_until("the account is offline", Duration::from_secs(15), |env| {
+        env.account_state("Pins")["state"]["state"] == "offline"
+    });
+    assert_eq!(
+        std::fs::read_to_string(mount.join("Passwords/db.kdbx")).unwrap(),
+        "v2"
+    );
+    std::fs::write(mount.join("Work/a.txt"), "edited offline").unwrap();
+    std::fs::write(mount.join("Work/offline.txt"), "created offline").unwrap();
+    let mut root: Vec<String> = std::fs::read_dir(&mount)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    root.sort();
+    assert_eq!(root, ["Misc", "Passwords", "Work", "big.bin"]);
+    let started = Instant::now();
+    let err = std::fs::read(mount.join("big.bin")).unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(libc_ehostunreach()), "{err}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    // Changed on both sides meanwhile.
+    std::fs::write(src.join("Work/sub/b.txt"), "b, remote version").unwrap();
+    std::fs::write(mount.join("Work/sub/b.txt"), "b, local version").unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        std::fs::read_to_string(src.join("Work/a.txt")).unwrap(),
+        "a, changed remotely",
+        "nothing is sent while offline"
+    );
+    assert!(env.json(&["pin", "list"])[1]["pending"].as_u64().unwrap() >= 2);
+
+    // Back online: the changes go up, the conflict keeps both versions.
+    std::fs::remove_file(&offline_flag).unwrap();
+    env.wait_until(
+        "offline changes are uploaded",
+        Duration::from_secs(30),
+        |_| {
+            std::fs::read_to_string(src.join("Work/a.txt")).is_ok_and(|s| s == "edited offline")
+                && src.join("Work/offline.txt").exists()
+        },
+    );
+    env.wait_until("the conflict is resolved", Duration::from_secs(30), |_| {
+        std::fs::read_dir(src.join("Work/sub")).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("(conflict ")
+        })
+    });
+    let conflict = std::fs::read_dir(src.join("Work/sub"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().contains("(conflict "))
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&conflict).unwrap(),
+        "b, local version"
+    );
+    env.wait_until(
+        "the remote version is downloaded",
+        Duration::from_secs(30),
+        |_| {
+            std::fs::read_to_string(mount.join("Work/sub/b.txt"))
+                .is_ok_and(|s| s == "b, remote version")
+        },
+    );
+    assert!(
+        env.account_state("Pins")["pins_conflicts"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+
+    // Restart without network: the folder is there, pinned items open.
+    std::fs::write(&offline_flag, "").unwrap();
+    env.stop_daemon();
+    env.start_daemon();
+    assert!(fuse_mounted(&mount), "mounted offline");
+    assert_eq!(
+        std::fs::read_to_string(mount.join("Passwords/db.kdbx")).unwrap(),
+        "v2"
+    );
+    assert_eq!(
+        std::fs::read_to_string(mount.join("Work/new.txt")).unwrap(),
+        "new"
+    );
+    assert!(mount.join("Misc").is_dir(), "the tree stays browsable");
+    assert_eq!(env.account_state("Pins")["state"]["state"], "offline");
+    std::fs::remove_file(&offline_flag).unwrap();
+    env.wait_until("back online", Duration::from_secs(20), |env| {
+        env.account_state("Pins")["state"]["state"] == "up_to_date"
+    });
+    assert_eq!(
+        std::fs::read_to_string(mount.join("Misc/c.txt")).unwrap(),
+        "c"
+    );
+
+    // Unpinning waits for the changes to be uploaded.
+    env.json(&["pause", "Pins"]);
+    std::fs::write(mount.join("Passwords/db.kdbx"), "v3").unwrap();
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(
+        env.json_error(&["pin", "remove", "Pins:Passwords/db.kdbx"], 1),
+        "busy"
+    );
+    env.json(&["resume", "Pins"]);
+    env.wait_until("v3 is uploaded", Duration::from_secs(30), |_| {
+        std::fs::read_to_string(src.join("Passwords/db.kdbx")).is_ok_and(|s| s == "v3")
+    });
+    env.json(&["pin", "remove", "Pins:Passwords/db.kdbx"]);
+    assert!(!store.join("Passwords/db.kdbx").exists());
+    // Still there, now through rclone.
+    assert_eq!(
+        std::fs::read_to_string(mount.join("Passwords/db.kdbx")).unwrap(),
+        "v3"
+    );
+}
+
+fn libc_ehostunreach() -> i32 {
+    113
 }

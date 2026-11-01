@@ -16,7 +16,8 @@ first in your `PATH`.
 cargo build            # default members: everything except the GTK crates
 cargo test             # end-to-end tests are skipped without rclone and FUSE
 scripts/build-native.sh   # static tarball and .deb in target/dist/ (needs the
-                          # x86_64-unknown-linux-musl target and cargo-deb)
+                          # x86_64-unknown-linux-musl target, cargo-deb and
+                          # musl-tools: SQLite is compiled in with musl-gcc)
 export NUAGE_RCLONE=/path/to/rclone
 cargo run -p nuaged &  # start the daemon (socket in $XDG_RUNTIME_DIR/nuage/)
 mkdir -p /tmp/files && echo hello > /tmp/files/hello.txt

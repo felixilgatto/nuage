@@ -517,6 +517,15 @@ impl Inner {
             )));
         }
 
+        // Pinned files changed offline exist nowhere else either.
+        let (_, pins_pending, _) = self.pins.summary(&account.id);
+        if pins_pending > 0 && !force {
+            return Err(Error::Busy(format!(
+                "{pins_pending} change(s) to items of \"{}\" kept offline are not uploaded yet. Wait for the connection, or remove anyway with --force (they are lost).",
+                account.display_name
+            )));
+        }
+
         let mut st = self.state.lock().await;
         let i = st.resolve(&account.id)?;
         // rclone names the cache after the backend it wraps (an alias of a
@@ -560,6 +569,7 @@ impl Inner {
         // Only removed if empty: never delete user files.
         let _ = std::fs::remove_dir(&account.mount_point);
         let _ = std::fs::remove_dir_all(&local_only);
+        self.pins_account_removed(&account.id);
         let _ = std::fs::remove_dir(
             crate::MountPlan::layered(&account, &self.paths).rclone_mount_point,
         );

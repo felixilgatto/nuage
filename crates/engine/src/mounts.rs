@@ -319,7 +319,21 @@ impl Inner {
         let result = self.do_mount(st, &account).await;
         let runtime = st.runtime(&account.id);
         match &result {
-            Ok(plan) => {
+            // Offline: only nuage-fs, from the pins; the hidden mount comes
+            // when the connection is back (see `set_online`).
+            Ok((plan, false)) => {
+                runtime.offline = true;
+                runtime.mount_error = None;
+                if let Some(fs) = &runtime.fs {
+                    fs.set_offline(true);
+                }
+                self.emit(Event::MountChanged {
+                    account: account.id.clone(),
+                    mounted: true,
+                });
+                tracing::warn!(account = %account.display_name, at = %plan.user_mount_point.display(), "mounted offline");
+            }
+            Ok((plan, true)) => {
                 runtime.mounted = Some(plan.clone());
                 runtime.mount_error = None;
                 runtime.quota_at = None;
@@ -337,7 +351,8 @@ impl Inner {
         result.map(drop)
     }
 
-    async fn do_mount(&self, st: &mut State, account: &Account) -> Result<MountPlan> {
+    /// Mounts both layers; `false`: offline, only `nuage-fs`.
+    async fn do_mount(&self, st: &mut State, account: &Account) -> Result<(MountPlan, bool)> {
         let provider = self.registry.get(&account.provider_id).ok_or_else(|| {
             Error::Unsupported(format!(
                 "The provider \"{}\" of \"{}\" is not available in this build of Nuage.",
@@ -374,9 +389,20 @@ impl Inner {
                 .or(st.config.settings.cache_max_age_secs),
             &rules,
         )?;
-        rc.mount(&request)
-            .await
-            .map_err(|e| Error::Rclone(mount_error(account, &e)))?;
+        let offline_start = crate::pins::test_offline() || st.runtime(&account.id).offline;
+        let hidden_mounted = if offline_start {
+            false
+        } else {
+            match rc.mount(&request).await {
+                Ok(()) => true,
+                // No network: the pinned items are still there.
+                Err(e) if crate::files::is_offline(&e) => {
+                    tracing::warn!(account = %account.display_name, error = %e, "cannot reach the provider; mounting offline");
+                    false
+                }
+                Err(e) => return Err(Error::Rclone(mount_error(account, &e))),
+            }
+        };
 
         // nuage-fs at the user's folder, unless it is still there.
         if st.runtime(&account.id).fs.is_none() {
@@ -392,6 +418,9 @@ impl Inner {
                         name: account.remote_name.clone(),
                         local_only: Some(self.paths.local_only(&account.id)),
                         exclusions: ExclusionSet::new(&rules),
+                        store: Some(self.paths.pin_store(&account.id)),
+                        pins: self.pin_view(&account.id),
+                        offline: !hidden_mounted,
                         ..nuage_fs::MountConfig::default()
                     };
                     tokio::task::spawn_blocking(move || nuage_fs::mount(&backing, &user, &config))
@@ -411,12 +440,15 @@ impl Inner {
                 Ok(fs) => st.runtime(&account.id).fs = Some(fs),
                 Err(e) => {
                     // Do not leave the hidden mount behind.
-                    if let Err(u) = rc.unmount(path_str(hidden)?).await {
+                    if hidden_mounted && let Err(u) = rc.unmount(path_str(hidden)?).await {
                         tracing::warn!(error = %u, "cannot unmount the hidden mount");
                     }
                     return Err(e);
                 }
             }
+        }
+        if !hidden_mounted {
+            return Ok((plan, false));
         }
 
         let mut caps = provider.static_capabilities();
@@ -427,7 +459,7 @@ impl Inner {
             }
         }
         st.runtime(&account.id).capabilities = Some(caps);
-        Ok(plan)
+        Ok((plan, true))
     }
 
     /// Unmounts both layers of an account. Writes not uploaded yet stay in
@@ -436,6 +468,8 @@ impl Inner {
         let runtime = st.runtime(&account.id);
         let fs = runtime.fs.take();
         let plan = runtime.mounted.take();
+        // Checked again at the next mount.
+        runtime.offline = false;
         if fs.is_none() && plan.is_none() {
             return Ok(());
         }

@@ -81,7 +81,7 @@ jobs:
           tool: cargo-deb
 
       - name: Install FUSE
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fuse3 jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fuse3 jq musl-tools
 
       - name: Build the tarball and the .deb
         run: scripts/build-native.sh

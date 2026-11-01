@@ -8,6 +8,7 @@
 //! | `<account>:cache-max-age` | the same for one account (`default`: the global one) |
 //! | `<account>:default-exclusions` | `on` or `off` |
 //! | `quit-with-pending` | `finish-in-background`, `ask` or `quit-now` |
+//! | `offline-check-interval` | how often the connection is checked and pinned items synced (`30s`) |
 //!
 //! Changing the cache settings of a mounted account remounts its hidden
 //! rclone mount (the folder stays; pending uploads go on after it).
@@ -22,6 +23,7 @@ const CACHE_LIMIT: &str = "cache-limit";
 const CACHE_MAX_AGE: &str = "cache-max-age";
 const QUIT_WITH_PENDING: &str = "quit-with-pending";
 const DEFAULT_EXCLUSIONS: &str = "default-exclusions";
+const OFFLINE_CHECK: &str = "offline-check-interval";
 
 fn entry(key: impl Into<String>, value: impl Into<String>) -> ConfigEntry {
     ConfigEntry {
@@ -41,6 +43,13 @@ fn all_entries(st: &State, recommended_age: Option<u64>) -> Vec<ConfigEntry> {
                 .map_or_else(|| "default".to_owned(), format_duration),
         ),
         entry(QUIT_WITH_PENDING, s.quit_with_pending.as_str()),
+        entry(
+            OFFLINE_CHECK,
+            format_duration(
+                s.offline_check_interval_secs
+                    .unwrap_or(crate::pins::DEFAULT_CHECK_INTERVAL.as_secs()),
+            ),
+        ),
     ];
     for r in &st.config.accounts {
         entries.push(entry(
@@ -77,7 +86,7 @@ fn parse_age(value: &str) -> Result<Option<u64>> {
 
 fn unknown_key(key: &str) -> Error {
     Error::InvalidArgument(format!(
-        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, {CACHE_MAX_AGE}, <account>:{CACHE_MAX_AGE}, <account>:{DEFAULT_EXCLUSIONS}, {QUIT_WITH_PENDING}."
+        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, {CACHE_MAX_AGE}, <account>:{CACHE_MAX_AGE}, <account>:{DEFAULT_EXCLUSIONS}, {QUIT_WITH_PENDING}, {OFFLINE_CHECK}."
     ))
 }
 
@@ -191,6 +200,15 @@ impl Inner {
                             .map(|(i, _)| i),
                     );
                     entry(key, text)
+                }
+                OFFLINE_CHECK => {
+                    let secs = parse_duration(value).filter(|s| *s > 0).ok_or_else(|| {
+                        Error::InvalidArgument(format!(
+                            "\"{value}\" is not a duration. Write it like 30s, 5m or 1h."
+                        ))
+                    })?;
+                    s.offline_check_interval_secs = Some(secs);
+                    entry(key, format_duration(secs))
                 }
                 QUIT_WITH_PENDING => {
                     s.quit_with_pending = QuitBehavior::parse(value).ok_or_else(|| {

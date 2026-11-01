@@ -235,60 +235,22 @@ pub enum DaemonCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum PinCommand {
-    /// Keep a file or folder available offline.
-    Add { path: String },
-    /// Remove the offline copy.
-    Remove { path: String },
+    /// Keep a file or folder (with everything in it) on this computer,
+    /// available offline. Returns once it is downloaded.
+    Add {
+        /// <account>:<path>
+        path: String,
+    },
+    /// Remove the offline copy (the item stays in the cloud).
+    Remove {
+        /// <account>:<path>
+        path: String,
+        /// Remove even if local changes are not uploaded yet (they are lost).
+        #[arg(long)]
+        force: bool,
+    },
     /// List items kept offline.
     List { account: Option<String> },
-}
-
-impl Commands {
-    /// Name of the command as typed, for messages.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Commands::Status { .. } => "status",
-            Commands::Account(a) => match a {
-                AccountCommand::Add(_) => "account add",
-                AccountCommand::List => "account list",
-                AccountCommand::Rename { .. } => "account rename",
-                AccountCommand::Move { .. } => "account move",
-                AccountCommand::Reconnect { .. } => "account reconnect",
-                AccountCommand::Remove { .. } => "account remove",
-            },
-            Commands::Mount { .. } => "mount",
-            Commands::Unmount { .. } => "unmount",
-            Commands::Pause { .. } => "pause",
-            Commands::Resume { .. } => "resume",
-            Commands::Refresh { .. } => "refresh",
-            Commands::Ls { .. } => "ls",
-            Commands::Mkdir { .. } => "mkdir",
-            Commands::Mv { .. } => "mv",
-            Commands::Cp { .. } => "cp",
-            Commands::Rm { .. } => "rm",
-            Commands::Upload { .. } => "upload",
-            Commands::Download { .. } => "download",
-            Commands::Link { .. } => "link",
-            Commands::Exclude(e) => match e {
-                ExcludeCommand::Add { .. } => "exclude add",
-                ExcludeCommand::Remove { .. } => "exclude remove",
-                ExcludeCommand::List { .. } => "exclude list",
-            },
-            Commands::Config(c) => match c {
-                ConfigCommand::Get { .. } => "config get",
-                ConfigCommand::Set { .. } => "config set",
-            },
-            Commands::Daemon(d) => match d {
-                DaemonCommand::Status => "daemon status",
-                DaemonCommand::Stop { .. } => "daemon stop",
-            },
-            Commands::Pin(p) => match p {
-                PinCommand::Add { .. } => "pin add",
-                PinCommand::Remove { .. } => "pin remove",
-                PinCommand::List { .. } => "pin list",
-            },
-        }
-    }
 }
 
 #[cfg(test)]

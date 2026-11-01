@@ -1,5 +1,4 @@
-//! Offline pinning (v1.1). The types exist now so that the protocol and the
-//! account configuration do not change when the feature lands.
+//! Offline pinning (v1.1): files and folders kept on this computer.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,6 +12,14 @@ pub struct Pin {
     pub path: String,
     pub kind: PinKind,
     pub pinned_at: DateTime<Utc>,
+    #[serde(default)]
+    pub state: PinState,
+    /// Bytes kept on this computer.
+    #[serde(default)]
+    pub size: u64,
+    /// Local changes not uploaded yet (offline, paused, being written).
+    #[serde(default)]
+    pub pending: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -22,10 +29,11 @@ pub enum PinKind {
     FolderRecursive,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinState {
     Downloading,
+    #[default]
     Available,
     ModifiedLocally,
     Conflict,

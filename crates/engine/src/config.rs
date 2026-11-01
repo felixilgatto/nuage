@@ -26,6 +26,9 @@ pub struct Settings {
     /// recommendation.
     pub cache_max_age_secs: Option<u64>,
     pub quit_with_pending: QuitBehavior,
+    /// How often the connection is checked and pinned items synced, in
+    /// seconds. `None`: 30 s.
+    pub offline_check_interval_secs: Option<u64>,
 }
 
 impl Default for Settings {
@@ -34,6 +37,7 @@ impl Default for Settings {
             default_cache_limit: DEFAULT_CACHE_LIMIT,
             cache_max_age_secs: None,
             quit_with_pending: QuitBehavior::default(),
+            offline_check_interval_secs: None,
         }
     }
 }

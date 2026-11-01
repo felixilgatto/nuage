@@ -281,6 +281,9 @@ mod tests {
                 ..Quota::default()
             }),
             cache_used: 1_500_000,
+            offline_used: 0,
+            pins_pending: 0,
+            pins_conflicts: 0,
         }
     }
 

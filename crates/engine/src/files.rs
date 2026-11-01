@@ -64,7 +64,7 @@ fn join(dir: &str, name: &str) -> String {
 }
 
 /// Removes `.` and empty components and refuses `..`.
-fn clean(path: &str) -> Result<String> {
+pub(crate) fn clean(path: &str) -> Result<String> {
     let mut out = Vec::new();
     for c in path.split('/') {
         match c {
@@ -92,7 +92,7 @@ fn is_not_found(e: &RcError) -> bool {
 }
 
 /// Whether the error comes from the network rather than from the request.
-fn is_offline(e: &RcError) -> bool {
+pub(crate) fn is_offline(e: &RcError) -> bool {
     match e {
         RcError::Http(_) => false,
         RcError::Api { message, .. } => {
@@ -281,7 +281,11 @@ impl Inner {
         let path = clean(&at.path)?;
         let rc = self.rc().await?;
         let mut entries = match rc.list(&target.fs, &path).await {
-            Ok(items) => items.iter().map(|i| entry_from(i, &target)).collect(),
+            Ok(items) => {
+                // Browsable offline later.
+                self.save_listing(&target.account.id, &path, &items);
+                items.iter().map(|i| entry_from(i, &target)).collect()
+            }
             Err(e) if is_not_found(&e) => {
                 return Err(Error::NotFound(format!(
                     "\"{}\" does not exist.",

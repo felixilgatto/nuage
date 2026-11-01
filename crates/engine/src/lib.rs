@@ -10,7 +10,7 @@
 //!  ├─ settings          `nuage config get/set`
 //!  ├─ exclusions        per-account rules → rclone filters + local-only in nuage-fs
 //!  ├─ files             list, mkdir, move, copy, delete, upload, download, link
-//!  └─ PinManager        offline pinning (v1.1)
+//!  └─ pins              offline pinning (v1.1): pin store, sync, offline
 //! ```
 //!
 //! The engine owns all the daemon state. It is shared between the IPC
@@ -24,6 +24,7 @@ mod exclusions;
 mod files;
 mod mounts;
 mod paths;
+mod pindb;
 mod pins;
 mod secrets;
 mod settings;
@@ -43,7 +44,6 @@ use tokio::task::JoinHandle;
 pub use config::QuitBehavior;
 pub use mounts::MountPlan;
 pub use paths::Paths;
-pub use pins::PinManager;
 pub use units::{format_duration, format_size, parse_duration, parse_size};
 
 pub use nuage_providers::ProviderRegistry;
@@ -93,7 +93,7 @@ pub(crate) struct Inner {
     sign_in: Mutex<Option<signin::PendingSignIn>>,
     /// `rclone.conf` is encrypted with a password from the keyring.
     config_encrypted: std::sync::atomic::AtomicBool,
-    pins: PinManager,
+    pins: pins::Pins,
 }
 
 #[derive(Debug)]
@@ -126,6 +126,9 @@ pub(crate) struct Runtime {
     disk_cache: Option<DiskCache>,
     /// The provider refused the account's sign-in: it must be reconnected.
     auth_error: Option<String>,
+    /// The provider cannot be reached: `nuage-fs` serves the pinned items
+    /// and the saved listings (v1.1).
+    offline: bool,
 }
 
 impl State {
@@ -187,6 +190,7 @@ impl Engine {
             pid_file: Some(config.paths.rcd_pid_file()),
         });
         let (events, _) = broadcast::channel(256);
+        let pins = pins::Pins::open(&config.paths.pin_db())?;
         Ok(Self {
             inner: Arc::new(Inner {
                 registry,
@@ -204,7 +208,7 @@ impl Engine {
                 background: std::sync::Mutex::new(None),
                 sign_in: Mutex::new(None),
                 config_encrypted: std::sync::atomic::AtomicBool::new(false),
-                pins: PinManager::default(),
+                pins,
             }),
         })
     }
@@ -411,13 +415,11 @@ impl Engine {
                 .list_exclusions(account.as_ref())
                 .await
                 .map(Reply::Exclusions),
-            Command::PinAdd { path, kind } => {
-                inner.pins.add(&path, kind).await.map(|()| Reply::Done)
+            Command::PinAdd { path } => inner.pin_add(&path).await.map(|()| Reply::Done),
+            Command::PinRemove { path, force } => {
+                inner.pin_remove(&path, force).await.map(|()| Reply::Done)
             }
-            Command::PinRemove { path } => inner.pins.remove(&path).await.map(|()| Reply::Done),
-            Command::PinList { account } => {
-                inner.pins.list(account.as_ref()).await.map(Reply::Pins)
-            }
+            Command::PinList { account } => inner.pin_list(account.as_ref()).await.map(Reply::Pins),
             // Daemon-level commands are answered by `nuaged` itself.
             Command::DaemonInfo | Command::DaemonStop { .. } => Err(Error::Internal(
                 "daemon command routed to the engine".to_owned(),
@@ -505,6 +507,7 @@ impl Inner {
             self.check_rcd().await;
             self.release_uploads().await;
             self.expire_sign_in().await;
+            self.pins_tick().await;
             if n % 2 == 0 {
                 self.poll_status().await;
             }

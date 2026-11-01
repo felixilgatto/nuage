@@ -18,6 +18,8 @@ struct Snapshot {
     mounted: bool,
     mount_error: Option<String>,
     quota_due: bool,
+    /// The folder is served offline (pinned items, saved listings).
+    offline: bool,
 }
 
 /// Whether an rclone error says that the provider refused the sign-in
@@ -129,6 +131,7 @@ impl Inner {
                         mounted,
                         mount_error: runtime.and_then(|rt| rt.mount_error.clone()),
                         quota_due: mounted && quota_capable && !quota_fresh,
+                        offline: runtime.is_some_and(|rt| rt.offline && rt.fs.is_some()),
                     }
                 })
                 .collect()
@@ -212,18 +215,27 @@ impl Inner {
                 }
                 runtime.disk_cache = Some(cache.clone());
             }
-            let state = account_state(
-                s.paused,
-                s.mounted,
-                (s.mount_error.as_deref(), runtime.auth_error.as_deref()),
-                stats.as_ref(),
-            );
+            let state = if s.offline {
+                SyncState::Offline
+            } else {
+                account_state(
+                    s.paused,
+                    s.mounted,
+                    (s.mount_error.as_deref(), runtime.auth_error.as_deref()),
+                    stats.as_ref(),
+                )
+            };
+            let (offline_used, pins_pending, pins_conflicts) = self.pins.summary(&s.account.id);
             accounts.push(AccountStatus {
                 account: s.account.clone(),
                 state,
-                mounted: s.mounted,
+                // Offline, the folder is there (served from the pins).
+                mounted: s.mounted || s.offline,
                 quota: runtime.quota,
                 cache_used: runtime.disk_cache.as_ref().map_or(0, |c| c.bytes_used),
+                offline_used,
+                pins_pending,
+                pins_conflicts,
             });
         }
         let report = StatusReport {

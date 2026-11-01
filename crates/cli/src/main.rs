@@ -12,12 +12,14 @@ use clap::Parser;
 use serde_json::json;
 
 use nuage_core::{
-    AccountAddArgs, AccountId, Badge, Command, Event, ExclusionRule, Quota, RemotePath, Reply,
-    StatusReport, SyncState,
+    AccountAddArgs, AccountId, Badge, Command, Event, ExclusionRule, PinKind, PinState, Quota,
+    RemotePath, Reply, StatusReport, SyncState,
 };
 use nuage_ipc::{Client, IpcError};
 
-use args::{AccountCommand, Cli, Commands, ConfigCommand, DaemonCommand, ExcludeCommand};
+use args::{
+    AccountCommand, Cli, Commands, ConfigCommand, DaemonCommand, ExcludeCommand, PinCommand,
+};
 
 /// Documented exit codes.
 mod exit {
@@ -65,14 +67,6 @@ impl From<nuage_core::Error> for Failure {
             message: e.to_string(),
             exit,
         }
-    }
-}
-
-fn not_implemented(what: &str) -> Failure {
-    Failure {
-        code: "not_implemented",
-        message: format!("`nuage {what}` is not implemented yet."),
-        exit: exit::ERROR,
     }
 }
 
@@ -130,6 +124,94 @@ fn show(path: &RemotePath) -> String {
 fn absolute(path: &std::path::Path) -> Result<std::path::PathBuf, Failure> {
     std::path::absolute(path)
         .map_err(|e| usage(format!("\"{}\" is not a valid path: {e}", path.display())))
+}
+
+async fn pin_command(cli: &Cli, command: &PinCommand) -> Result<(), Failure> {
+    match command {
+        PinCommand::Add { path } => {
+            let path = remote(path)?;
+            request(cli, Command::PinAdd { path: path.clone() }).await?;
+            done(
+                cli,
+                &format!(
+                    "{} is kept on this computer: it opens and can be edited offline.",
+                    show(&path)
+                ),
+            );
+        }
+        PinCommand::Remove { path, force } => {
+            let path = remote(path)?;
+            request(
+                cli,
+                Command::PinRemove {
+                    path: path.clone(),
+                    force: *force,
+                },
+            )
+            .await?;
+            done(
+                cli,
+                &format!(
+                    "The offline copy of {} is removed; it stays in the cloud.",
+                    show(&path)
+                ),
+            );
+        }
+        PinCommand::List { account: name } => {
+            let Reply::Pins(pins) = request(
+                cli,
+                Command::PinList {
+                    account: name.as_deref().map(account),
+                },
+            )
+            .await?
+            else {
+                return Err(unexpected());
+            };
+            if cli.json {
+                print_json(&pins);
+                return Ok(());
+            }
+            if pins.is_empty() {
+                println!(
+                    "Nothing is kept offline. Add an item with: nuage pin add <account>:<path>"
+                );
+                return Ok(());
+            }
+            let Reply::Accounts(accounts) = request(cli, Command::AccountList).await? else {
+                return Err(unexpected());
+            };
+            for p in &pins {
+                let name = accounts
+                    .iter()
+                    .find(|a| a.id == p.account)
+                    .map_or(p.account.as_str(), |a| a.display_name.as_str());
+                let state = match p.state {
+                    PinState::Downloading => "↓ downloading",
+                    PinState::Available => "✓ available offline",
+                    PinState::ModifiedLocally => "↑ changes to upload",
+                    PinState::Conflict => "⚠ conflict (both versions kept)",
+                    PinState::Error => "⚠ error (see the daemon log)",
+                };
+                let pending = if p.pending > 0 {
+                    format!(", {} change(s) waiting", p.pending)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "{name}:{}{}  {state}, {}{pending}",
+                    p.path,
+                    if p.kind == PinKind::FolderRecursive {
+                        "/"
+                    } else {
+                        ""
+                    },
+                    human_size(p.size)
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn ls(cli: &Cli, path: &RemotePath) -> Result<(), Failure> {
@@ -426,8 +508,7 @@ async fn run(cli: &Cli) -> Result<(), Failure> {
             );
             Ok(())
         }
-        // v1.1.
-        other @ Commands::Pin(_) => Err(not_implemented(other.name())),
+        Commands::Pin(command) => pin_command(cli, command).await,
         Commands::Link { path } => {
             let path = remote(path)?;
             let Reply::Link(url) = request(cli, Command::PublicLink { path }).await? else {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Account, AccountId, AuthKind, Capabilities, CredentialField, CustomClient, Entry, Exclusion,
-    ExclusionRule, GuideStep, Pin, PinKind, Quota, RemotePath, SyncState,
+    ExclusionRule, GuideStep, Pin, Quota, RemotePath, SyncState,
 };
 
 /// A request from a client (CLI, GTK app, tray) to the daemon.
@@ -160,12 +160,16 @@ pub enum Command {
     },
 
     // Offline pinning (v1.1)
+    /// Keeps a file or folder (with everything in it) on this computer.
+    /// Replies once its copy is downloaded.
     PinAdd {
         path: RemotePath,
-        kind: PinKind,
     },
     PinRemove {
         path: RemotePath,
+        /// Remove even if local changes are not uploaded yet (they are lost).
+        #[serde(default)]
+        force: bool,
     },
     PinList {
         account: Option<AccountId>,
@@ -258,6 +262,15 @@ pub struct AccountStatus {
     pub quota: Option<Quota>,
     /// Size of the account's local cache, in bytes.
     pub cache_used: u64,
+    /// Size of the pinned items kept offline, in bytes (v1.1).
+    #[serde(default)]
+    pub offline_used: u64,
+    /// Pinned files with local changes not uploaded yet.
+    #[serde(default)]
+    pub pins_pending: u32,
+    /// Conflicts found since the daemon started (both versions kept).
+    #[serde(default)]
+    pub pins_conflicts: u32,
 }
 
 /// A sign-in in progress.

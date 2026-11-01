@@ -91,6 +91,21 @@ impl Paths {
         self.data_dir.join("local-only").join(account.as_str())
     }
 
+    /// Copies of an account's pinned items (v1.1).
+    pub fn pin_store(&self, account: &nuage_core::AccountId) -> PathBuf {
+        self.data_dir.join("pins").join(account.as_str())
+    }
+
+    /// Downloads of pinned files, renamed into the store once complete.
+    pub fn pin_staging(&self) -> PathBuf {
+        self.data_dir.join("pins-staging")
+    }
+
+    /// Pins, their reference states and saved listings (SQLite).
+    pub fn pin_db(&self) -> PathBuf {
+        self.data_dir.join("pins.db")
+    }
+
     pub fn rcd_pid_file(&self) -> PathBuf {
         self.data_dir.join("rcd.pid")
     }

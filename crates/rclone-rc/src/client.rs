@@ -363,7 +363,23 @@ impl RcClient {
         Ok(a.list)
     }
 
-    /// `operations/stat`: `None` when nothing is at `remote`.
+    /// `operations/list` of everything under `remote`, with hashes.
+    pub async fn list_recursive(&self, fs: &str, remote: &str) -> Result<Vec<ListItem>, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            list: Vec<ListItem>,
+        }
+        let a: Answer = self
+            .call(
+                "operations/list",
+                &json!({ "fs": fs, "remote": remote, "opt": { "recurse": true, "showHash": true } }),
+            )
+            .await?;
+        Ok(a.list)
+    }
+
+    /// `operations/stat`, with hashes: `None` when nothing is at `remote`.
     pub async fn stat(&self, fs: &str, remote: &str) -> Result<Option<ListItem>, RcError> {
         #[derive(Deserialize)]
         struct Answer {
@@ -371,7 +387,10 @@ impl RcClient {
             item: Option<ListItem>,
         }
         let a: Answer = self
-            .call("operations/stat", &json!({ "fs": fs, "remote": remote }))
+            .call(
+                "operations/stat",
+                &json!({ "fs": fs, "remote": remote, "opt": { "showHash": true } }),
+            )
             .await?;
         Ok(a.item)
     }
