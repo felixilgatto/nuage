@@ -62,6 +62,10 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(5);
 /// Pause between two tries of a keyring that did not answer.
 const KEYRING_RETRY: Duration = Duration::from_secs(5);
 
+/// How long the accounts show a calm "waiting for the keyring" before it
+/// becomes an error: at login, the user may take a while to unlock it.
+const KEYRING_PATIENCE: Duration = Duration::from_secs(180);
+
 /// How the engine is set up by the daemon.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -96,9 +100,10 @@ pub(crate) struct Inner {
     sign_in: Mutex<Option<signin::PendingSignIn>>,
     /// `rclone.conf` is encrypted with a password from the keyring.
     config_encrypted: std::sync::atomic::AtomicBool,
-    /// Why rclone cannot start yet: the keyring holding the password of
-    /// `rclone.conf` does not answer (at login, it may not be ready).
-    keyring_wait: std::sync::Mutex<Option<String>>,
+    /// Why rclone cannot start yet, and since when: the keyring holding the
+    /// password of `rclone.conf` does not answer (at login, it may not be
+    /// ready, or wait to be unlocked).
+    keyring_wait: std::sync::Mutex<Option<(String, Instant)>>,
     pins: pins::Pins,
 }
 
@@ -463,7 +468,27 @@ impl Inner {
 
     /// Why rclone waits for the keyring, if it does.
     pub(crate) fn keyring_wait(&self) -> Option<String> {
-        self.keyring_wait.lock().expect("keyring lock").clone()
+        self.keyring_wait
+            .lock()
+            .expect("keyring lock")
+            .as_ref()
+            .map(|(message, _)| message.clone())
+    }
+
+    /// While rclone waits for the keyring: whether it has waited long
+    /// enough for the accounts to show an error, with its message.
+    pub(crate) fn keyring_overdue(&self) -> Option<Result<(), String>> {
+        self.keyring_wait
+            .lock()
+            .expect("keyring lock")
+            .as_ref()
+            .map(|(message, since)| {
+                if since.elapsed() < KEYRING_PATIENCE {
+                    Ok(())
+                } else {
+                    Err(message.clone())
+                }
+            })
     }
 
     /// The protection of `rclone.conf`, retried until the keyring answers.
@@ -483,16 +508,18 @@ impl Inner {
             match secrets::protect(&self.paths.rclone_config, &rclone, use_keyring, timeout).await {
                 // Without a keyring to wait for, the error is final.
                 Err(Error::AuthRequired(message)) if use_keyring => {
-                    let first = self
-                        .keyring_wait
-                        .lock()
-                        .expect("keyring lock")
-                        .replace(message.clone())
-                        .is_none();
+                    let first = {
+                        let mut wait = self.keyring_wait.lock().expect("keyring lock");
+                        let first = wait.is_none();
+                        wait.get_or_insert_with(|| (message.clone(), Instant::now()));
+                        first
+                    };
                     if first {
                         tracing::warn!("{message}");
-                        self.poll_status().await;
                     }
+                    // The background task does not run yet: the accounts
+                    // learn here that they wait, then that it lasts.
+                    self.poll_status().await;
                     // Long enough for an unlock prompt from now on.
                     timeout = secrets::KEYRING_UNLOCK_TIMEOUT;
                     tokio::time::sleep(KEYRING_RETRY).await;
@@ -621,6 +648,7 @@ impl Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nuage_core::SyncState;
 
     fn engine(root: &std::path::Path) -> Engine {
         Engine::new(
@@ -669,7 +697,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let engine = engine(dir.path());
         let message = "the keyring does not answer".to_owned();
-        *engine.inner.keyring_wait.lock().unwrap() = Some(message.clone());
+        *engine.inner.keyring_wait.lock().unwrap() = Some((message.clone(), Instant::now()));
         let err = engine
             .handle(Command::Refresh { account: None })
             .await
@@ -677,6 +705,54 @@ mod tests {
         assert_eq!(err, Error::AuthRequired(message));
         // The status is still served.
         assert!(engine.handle(Command::Status).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn accounts_wait_calmly_for_the_keyring_then_show_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let account = nuage_core::Account {
+            id: AccountId::new("0a1b2c3d"),
+            provider_id: "local".into(),
+            display_name: "Local folder".into(),
+            remote_name: "nuage-0a1b2c3d".into(),
+            mount_point: dir.path().join("Local folder"),
+            cache_limit: 1 << 30,
+        };
+        AppConfig {
+            accounts: vec![AccountRecord {
+                account,
+                paused: false,
+                auto_mount: true,
+                default_exclusions: true,
+                exclusions: Vec::new(),
+                cache_max_age_secs: None,
+            }],
+            ..AppConfig::default()
+        }
+        .save(&Paths::under(dir.path()).app_config())
+        .unwrap();
+        let engine = engine(dir.path());
+        let state = |reply| match reply {
+            Reply::Status(report) => (report.accounts[0].state.clone(), report.state),
+            other => panic!("unexpected reply {other:?}"),
+        };
+
+        let message = "the keyring does not answer".to_owned();
+        *engine.inner.keyring_wait.lock().unwrap() = Some((message.clone(), Instant::now()));
+        let (account, global) = state(engine.handle(Command::Status).await.unwrap());
+        assert_eq!(account, SyncState::WaitingForKeyring);
+        assert_eq!(global, SyncState::WaitingForKeyring);
+
+        let long_ago = Instant::now() - KEYRING_PATIENCE - Duration::from_secs(1);
+        *engine.inner.keyring_wait.lock().unwrap() = Some((message.clone(), long_ago));
+        let (account, _) = state(engine.handle(Command::Status).await.unwrap());
+        assert_eq!(
+            account,
+            SyncState::Error {
+                message,
+                failed_files: 0
+            }
+        );
     }
 
     #[tokio::test]

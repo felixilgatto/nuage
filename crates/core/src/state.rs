@@ -25,19 +25,25 @@ pub enum SyncState {
     },
     Stopped,
     Offline,
+    /// Not mounted yet: the keyring holding the password of the rclone
+    /// configuration has not answered (it waits to be unlocked at login).
+    /// After a few minutes without an answer, the state becomes an error.
+    WaitingForKeyring,
 }
 
 impl SyncState {
     /// Aggregates the states of several accounts into the global state shown
     /// by the tray icon and `nuage status`.
     ///
-    /// Priority: error > syncing > paused/stopped > offline > up to date.
+    /// Priority: error, syncing, waiting for the keyring, paused/stopped,
+    /// offline, up to date.
     /// Upload counters are summed. An empty set of accounts is up to date.
     pub fn aggregate<'a>(states: impl IntoIterator<Item = &'a SyncState>) -> SyncState {
         let mut errors = Vec::new();
         let mut failed = 0;
         let (mut uploads, mut queued, mut paused_queued) = (0, 0, 0);
         let (mut syncing, mut paused, mut stopped, mut offline) = (false, false, false, false);
+        let mut keyring = false;
 
         for state in states {
             match state {
@@ -63,6 +69,7 @@ impl SyncState {
                 }
                 SyncState::Stopped => stopped = true,
                 SyncState::Offline => offline = true,
+                SyncState::WaitingForKeyring => keyring = true,
             }
         }
 
@@ -76,6 +83,8 @@ impl SyncState {
                 uploads,
                 queued: queued + paused_queued,
             }
+        } else if keyring {
+            SyncState::WaitingForKeyring
         } else if paused {
             SyncState::Paused {
                 queued: paused_queued,
@@ -93,6 +102,20 @@ impl SyncState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waiting_for_the_keyring_is_calmer_than_an_error() {
+        let waiting = SyncState::WaitingForKeyring;
+        assert_eq!(
+            SyncState::aggregate([&SyncState::Stopped, &waiting]),
+            SyncState::WaitingForKeyring
+        );
+        let error = SyncState::Error {
+            message: "boom".into(),
+            failed_files: 0,
+        };
+        assert_eq!(SyncState::aggregate([&waiting, &error]), error);
+    }
 
     #[test]
     fn aggregate_empty_is_up_to_date() {

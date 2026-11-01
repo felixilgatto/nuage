@@ -6,8 +6,9 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 - Folders mount after a restart even when the keyring is slow to answer at
   login (a session that logs in automatically, or a desktop portal still
-  starting): Nuage waits for it and shows why in the meantime, instead of
-  stopping. The window starts the Nuage service again if it crashes.
+  starting): Nuage waits for it instead of stopping. Meanwhile, the tray shows
+  "Waiting for the keyring" with a key, not a problem; it becomes a problem
+  after 3 minutes. The window starts the Nuage service again if it crashes.
 - OneDrive: the drive named "OneDrive" is tried first; adding an account on a
   server with `--token-file` answers the same questions as a sign-in.
 - Removing an account no longer fills the log with errors about its cache.

@@ -41,6 +41,7 @@ pub fn icon_for_state(state: &SyncState) -> &'static str {
         SyncState::Paused { .. } | SyncState::Stopped => "media-playback-pause-symbolic",
         SyncState::Error { .. } => "dialog-warning-symbolic",
         SyncState::Offline => "network-offline-symbolic",
+        SyncState::WaitingForKeyring => "dialog-password-symbolic",
     }
 }
 
@@ -55,6 +56,7 @@ pub fn state_line(state: &SyncState) -> String {
         SyncState::Error { .. } => gettext("Problem"),
         SyncState::Stopped => gettext("Not mounted"),
         SyncState::Offline => gettext("Offline"),
+        SyncState::WaitingForKeyring => gettext("Waiting for the keyring"),
     }
 }
 

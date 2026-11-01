@@ -1016,6 +1016,9 @@ fn state_line(state: &SyncState) -> String {
         }
         SyncState::Stopped => "⏸ Not mounted".to_owned(),
         SyncState::Offline => "⚠ Offline".to_owned(),
+        SyncState::WaitingForKeyring => {
+            "⏳ Waiting for the keyring: unlock it to mount the folders".to_owned()
+        }
     }
 }
 

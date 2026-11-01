@@ -4,7 +4,7 @@ use nuage_core::{Command, Error, Event, Reply};
 
 /// Version of the IPC protocol. Bumped on every incompatible change; the
 /// daemon rejects clients speaking another version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A line sent by a client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

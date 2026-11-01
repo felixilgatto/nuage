@@ -17,6 +17,8 @@ struct Snapshot {
     paused: bool,
     mounted: bool,
     mount_error: Option<String>,
+    /// rclone waits for the keyring, not for long yet.
+    waiting_for_keyring: bool,
     quota_due: bool,
     /// The folder is served offline (pinned items, saved listings).
     offline: bool,
@@ -111,7 +113,7 @@ impl Inner {
     /// Polls rclone, updates the cached report, publishes the changes and
     /// returns the new report.
     pub(crate) async fn poll_status(&self) -> StatusReport {
-        let keyring_wait = self.keyring_wait();
+        let keyring = self.keyring_overdue();
         let snapshots: Vec<Snapshot> = {
             let st = self.state.lock().await;
             st.config
@@ -130,9 +132,11 @@ impl Inner {
                         account: r.account.clone(),
                         paused: r.paused,
                         mounted,
-                        mount_error: keyring_wait
-                            .clone()
-                            .or_else(|| runtime.and_then(|rt| rt.mount_error.clone())),
+                        mount_error: match &keyring {
+                            Some(Err(message)) => Some(message.clone()),
+                            _ => runtime.and_then(|rt| rt.mount_error.clone()),
+                        },
+                        waiting_for_keyring: matches!(keyring, Some(Ok(()))),
                         quota_due: mounted && quota_capable && !quota_fresh,
                         offline: runtime.is_some_and(|rt| rt.offline && rt.fs.is_some()),
                     }
@@ -219,7 +223,9 @@ impl Inner {
                 }
                 runtime.disk_cache = Some(cache.clone());
             }
-            let state = if s.offline {
+            let state = if s.waiting_for_keyring {
+                SyncState::WaitingForKeyring
+            } else if s.offline {
                 SyncState::Offline
             } else {
                 account_state(

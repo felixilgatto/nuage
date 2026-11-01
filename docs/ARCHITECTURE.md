@@ -77,7 +77,7 @@ adding a module and a Cargo feature in `providers`, without touching
   `0700`). Inside the Flatpak: `$XDG_RUNTIME_DIR/app/io.github.felixilgatto.Nuage/nuaged.sock`,
   which the host can also reach; the CLI tries both. `NUAGE_SOCKET` overrides.
 - Framing: one JSON object per line.
-- Handshake: the client sends `{"type":"hello","protocol_version":1,"client":"…"}`;
+- Handshake: the client sends `{"type":"hello","protocol_version":2,"client":"…"}`;
   the daemon answers `welcome`, or `rejected` with a message explaining which
   side to update, then closes.
 - Requests: `{"type":"request","id":N,"command":{…}}` → `{"type":"response","id":N,"ok":{…}}`
@@ -215,8 +215,9 @@ passes it to rcd as `RCLONE_CONFIG_PASS`. Without a keyring (headless, or
 does not answer (at login, the portal or the keyring may not be ready, or
 the keyring waits to be unlocked) does not stop the daemon: it serves
 clients and tries again every 5 s (each try waiting up to 2 min for an unlock
-prompt). In the meantime every account shows why, and commands that need
-rclone answer with the same message. With `NUAGE_KEYRING=off` the daemon stops
+prompt). In the meantime the accounts are `waiting_for_keyring` (a key in
+the tray, not a warning); after 3 min without an answer they turn to `error`
+with the reason. Commands that need rclone answer with that reason. With `NUAGE_KEYRING=off` the daemon stops
 with a message. The window starts a daemon that crashed again, at most once
 a minute, and keeps the previous log as `nuaged.log.old`. The password is never logged
 (`RcdSupervisor`'s `Debug` hides it).
@@ -259,6 +260,8 @@ and are queued again at the next mount.
 
 | Condition | `SyncState` |
 |---|---|
+| rclone waits for the keyring, less than 3 min | `waiting_for_keyring` |
+| rclone waits for the keyring, longer | `error` (with the reason) |
 | last mount failed | `error` (with the reason) |
 | not mounted | `stopped` |
 | upload errors, or cache disk full | `error` |

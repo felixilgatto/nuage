@@ -53,6 +53,9 @@ pub fn state_text(state: &SyncState) -> String {
         SyncState::Error { message, .. } => message.clone(),
         SyncState::Stopped => gettext("Not mounted"),
         SyncState::Offline => gettext("Offline"),
+        SyncState::WaitingForKeyring => {
+            gettext("Waiting for the keyring: unlock it to mount the folder")
+        }
     }
 }
 
@@ -64,6 +67,7 @@ pub fn state_icon(state: &SyncState) -> &'static str {
         SyncState::Paused { .. } | SyncState::Stopped => "media-playback-pause-symbolic",
         SyncState::Error { .. } => "dialog-warning-symbolic",
         SyncState::Offline => "network-offline-symbolic",
+        SyncState::WaitingForKeyring => "dialog-password-symbolic",
     }
 }
 
