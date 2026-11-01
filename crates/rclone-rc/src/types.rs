@@ -57,24 +57,24 @@ impl ConfigOutcome {
         self.option.as_ref()?.get("Name")?.as_str()
     }
 
-    /// What rclone proposes for the pending question: its default, or else
-    /// its first choice (e.g. the only OneDrive of a personal account).
-    pub fn proposed_answer(&self) -> Option<String> {
+    /// What rclone proposes for the pending question, leaving out the
+    /// answers already `tried`: its default, or else its first remaining
+    /// choice (e.g. which OneDrive drive), with that choice's description.
+    pub fn proposed_answer(&self, tried: &[String]) -> Option<(String, String)> {
         let option = self.option.as_ref()?;
+        let fresh = |v: &&str| !v.is_empty() && !tried.iter().any(|t| t == v);
         let default = option
             .get("Default")
             .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty());
-        let first = || {
-            option
-                .get("Examples")?
-                .as_array()?
-                .first()?
-                .get("Value")?
-                .as_str()
-                .filter(|v| !v.is_empty())
-        };
-        default.or_else(first).map(str::to_owned)
+            .filter(fresh)
+            .map(|v| (v.to_owned(), String::new()));
+        default.or_else(|| {
+            option.get("Examples")?.as_array()?.iter().find_map(|e| {
+                let value = e.get("Value")?.as_str().filter(fresh)?;
+                let help = e.get("Help").and_then(|h| h.as_str()).unwrap_or_default();
+                Some((value.to_owned(), help.to_owned()))
+            })
+        })
     }
 }
 
@@ -306,10 +306,18 @@ mod tests {
             "Default": "",
             "Examples": [{"Value": "b!abc", "Help": "OneDrive (personal)"}, {"Value": "b!def"}],
         }));
-        assert_eq!(choose.proposed_answer().as_deref(), Some("b!abc"));
+        let value = |o: &ConfigOutcome, tried: &[String]| o.proposed_answer(tried).map(|a| a.0);
+        assert_eq!(value(&choose, &[]).as_deref(), Some("b!abc"));
+        assert_eq!(
+            choose.proposed_answer(&[]).map(|a| a.1).as_deref(),
+            Some("OneDrive (personal)")
+        );
+        // The first drive was refused: the next one.
+        assert_eq!(value(&choose, &["b!abc".into()]).as_deref(), Some("b!def"));
+        assert_eq!(value(&choose, &["b!abc".into(), "b!def".into()]), None);
         let default = outcome(serde_json::json!({"Name": "q", "Default": "true"}));
-        assert_eq!(default.proposed_answer().as_deref(), Some("true"));
+        assert_eq!(value(&default, &[]).as_deref(), Some("true"));
         let none = outcome(serde_json::json!({"Name": "q", "Default": ""}));
-        assert_eq!(none.proposed_answer(), None);
+        assert_eq!(value(&none, &[]), None);
     }
 }

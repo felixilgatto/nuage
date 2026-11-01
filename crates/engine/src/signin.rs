@@ -271,29 +271,48 @@ impl Inner {
         } else {
             let mut outcome = job.output.clone().unwrap_or_default();
             let mut failure = None;
+            // rclone's proposals already answered: when rclone refuses one
+            // (e.g. a OneDrive drive whose root cannot be read), it asks
+            // again from an earlier question, and the next one is tried.
+            let mut tried: Vec<String> = Vec::new();
+            let mut proposed = false;
+            let mut refused: Option<String> = None;
             // Answer the questions rclone asks after the sign-in.
-            for _ in 0..10 {
+            for _ in 0..20 {
                 if !outcome.error.is_empty() {
-                    failure = Some(sign_in_error(&outcome.error));
-                    break;
+                    if proposed && !outcome.is_complete() {
+                        tracing::warn!(error = %outcome.error, "rclone refused its proposal, trying the next one");
+                        refused = Some(outcome.error.clone());
+                    } else {
+                        failure = Some(sign_in_error(&outcome.error));
+                        break;
+                    }
                 }
                 if outcome.is_complete() {
                     break;
                 }
+                proposed = false;
                 let question = outcome.pending_question().unwrap_or_default().to_owned();
                 // Our answer, or else what rclone proposes (e.g. which
-                // OneDrive drive: a personal account has one).
+                // OneDrive drive). No question: rclone only moves on.
                 let answer = match pending.answers.iter().find(|(k, _)| *k == question) {
                     Some((_, answer)) => answer.clone(),
-                    None => match outcome.proposed_answer() {
-                        Some(answer) => {
-                            tracing::info!(%question, %answer, "taking rclone's proposal");
+                    None if question.is_empty() => String::new(),
+                    None => match outcome.proposed_answer(&tried) {
+                        Some((answer, help)) => {
+                            tracing::info!(%question, %answer, %help, "taking rclone's proposal");
+                            tried.push(answer.clone());
+                            proposed = true;
                             answer
                         }
                         None => {
-                            failure = Some(Error::Rclone(format!(
-                                "rclone still asks \"{question}\" after the sign-in."
-                            )));
+                            // Every proposal was refused: say why.
+                            failure = Some(match refused.take() {
+                                Some(e) => sign_in_error(&e),
+                                None => Error::Rclone(format!(
+                                    "rclone still asks \"{question}\" after the sign-in."
+                                )),
+                            });
                             break;
                         }
                     },
