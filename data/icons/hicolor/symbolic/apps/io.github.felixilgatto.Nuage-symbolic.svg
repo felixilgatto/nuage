@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="20 18 92 92">
+  <title>Nuage</title>
+  <g fill="#2E3436">
+    <circle cx="46" cy="70" r="18"/><circle cx="66" cy="56" r="24"/><circle cx="88" cy="70" r="16"/><rect x="28" y="64" width="76" height="24" rx="12"/>
+  </g>
+</svg>

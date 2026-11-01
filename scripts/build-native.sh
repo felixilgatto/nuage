@@ -19,7 +19,8 @@ name="nuage-$version-x86_64-linux"
 rm -rf "$dist/$name"
 mkdir -p "$dist/$name"
 cp "$rel/nuaged" "$rel/nuage" target/rclone/rclone build-aux/native/install.sh \
-    build-aux/native/nuaged.service LICENSE README.md "$dist/$name/"
+    build-aux/native/nuaged.service LICENSE README.md \
+    docs/SERVER.md docs/GOOGLE_OAUTH.md docs/CLI.md docs/TROUBLESHOOTING.md "$dist/$name/"
 cp target/rclone/COPYING "$dist/$name/rclone-COPYING"
 tar -C "$dist" -czf "$dist/$name.tar.gz" "$name"
 rm -rf "${dist:?}/$name"

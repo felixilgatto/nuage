@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="320" viewBox="24 28 84 64">
+  <title>Nuage</title>
+  <defs>
+    <filter id="crayon" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="4" result="t"/>
+      <feDisplacementMap in="SourceGraphic" in2="t" scale="2.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+  <g filter="url(#crayon)" fill="#E8C3A6">
+    <circle cx="46" cy="70" r="18"/><circle cx="66" cy="56" r="24"/><circle cx="88" cy="70" r="16"/><rect x="28" y="64" width="76" height="24" rx="12"/>
+  </g>
+  <g fill="none" stroke="#5B4636" stroke-width="3" stroke-linecap="round">
+    <path d="M52 70 Q56 65 60 70"/><path d="M72 70 Q76 65 80 70"/><path d="M62 76 Q66 80 70 76"/>
+  </g>
+  <ellipse cx="49" cy="77" rx="5" ry="3.5" fill="#FF9E8A"/><ellipse cx="83" cy="77" rx="5" ry="3.5" fill="#FF9E8A"/>
+</svg>

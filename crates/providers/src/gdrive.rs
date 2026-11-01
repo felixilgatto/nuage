@@ -87,7 +87,7 @@ impl Provider for GoogleDrive {
             title: title.to_owned(),
             url: url.to_owned(),
         };
-        // Same steps as the README ("Create your own Google OAuth client").
+        // Same steps as docs/GOOGLE_OAUTH.md.
         vec![
             step(
                 "Create a project in the Google Cloud console",

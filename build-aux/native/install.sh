@@ -28,7 +28,8 @@ mkdir -p "$bin" "$lib" "$units" "$doc"
 install -m 755 "$here/nuaged" "$here/nuage" "$bin/"
 install -m 755 "$here/rclone" "$lib/rclone"
 sed "s|^ExecStart=.*|ExecStart=$bin/nuaged|" "$here/nuaged.service" > "$units/nuaged.service"
-install -m 644 "$here/LICENSE" "$here/rclone-COPYING" "$here/README.md" "$doc/"
+install -m 644 "$here/LICENSE" "$here/rclone-COPYING" "$here/README.md" \
+    "$here/SERVER.md" "$here/GOOGLE_OAUTH.md" "$here/CLI.md" "$here/TROUBLESHOOTING.md" "$doc/"
 
 echo "Nuage is installed in $bin."
 if ! command -v fusermount3 >/dev/null; then
