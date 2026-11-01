@@ -99,6 +99,10 @@ pub async fn reconnect(ui: &Rc<Ui>, account: &AccountId, parent: &impl IsA<gtk::
     match futures_select(cancelled, finished).await {
         Some(Ok(Ok(()))) => {
             dialog.force_close();
+            ui.come_back(
+                &gettext("{} is connected again").replace("{}", &name),
+                &gettext("Files sync again."),
+            );
             ui.toast(&gettext("{} is connected again").replace("{}", &name));
             ui.reload().await;
             true

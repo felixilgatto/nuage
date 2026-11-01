@@ -85,6 +85,43 @@ fn sign_in_error(raw: &str) -> Error {
     }
 }
 
+/// The page rclone shows in the browser once the sign-in is done (a Go
+/// template: `.OK`, `.Name`, `.Description`, `.Code`, `.HelpURL`), instead of
+/// rclone's "All done. Please go back to rclone."
+pub(crate) const SIGN_IN_PAGE: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ if .OK }}Signed in to Nuage{{ else }}Sign-in failed{{ end }}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, "Cantarell", sans-serif; margin: 0; min-height: 100vh;
+         display: grid; place-items: center; background: Canvas; color: CanvasText; }
+  main { max-width: 32rem; padding: 2rem; text-align: center; }
+  .mark { font-size: 3rem; line-height: 1; }
+  h1 { font-size: 1.6rem; margin: 1rem 0 0.5rem; }
+  p { line-height: 1.5; opacity: 0.85; }
+  .details { text-align: left; font-size: 0.9rem; opacity: 0.75; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+{{ if .OK }}
+  <div class="mark">&#10003;</div>
+  <h1>You are signed in</h1>
+  <p>Nuage received your sign-in. You can close this tab and go back to Nuage to finish.</p>
+{{ else }}
+  <div class="mark">&#9888;</div>
+  <h1>The sign-in did not work</h1>
+  <p>Go back to Nuage to try again. If it fails again, check the sign-in client you created.</p>
+  <p class="details">{{ .Name }}{{ if .Description }}: {{ .Description }}{{ end }}{{ if .HelpURL }}<br><a href="{{ .HelpURL }}">{{ .HelpURL }}</a>{{ end }}</p>
+{{ end }}
+</main>
+</body>
+</html>
+"#;
+
 impl Inner {
     /// Fails if a sign-in is already running.
     pub(crate) async fn check_no_sign_in(&self) -> Result<()> {
@@ -106,9 +143,20 @@ impl Inner {
         kind: SignInKind,
         answers: Vec<(String, String)>,
     ) -> Result<SignIn> {
+        // rclone takes the page from a file (values are single lines).
+        let page = self.paths.rcd_pid_file().with_file_name("sign-in-page.html");
+        std::fs::write(&page, SIGN_IN_PAGE)?;
+        let page = page.to_string_lossy().into_owned();
         let started = async {
             let ConfigStep::Job(job) = rc
-                .config_continue(remote_name, state, "true", true)
+                .config_continue(
+                    remote_name,
+                    state,
+                    "true",
+                    true,
+                    // Ephemeral (`config_*`): used for this sign-in only.
+                    serde_json::json!({ "config_template_file": page }),
+                )
                 .await
                 .map_err(nuage_core::Error::from)?
             else {
@@ -227,7 +275,13 @@ impl Inner {
                 };
                 tracing::debug!(%question, "answering rclone");
                 match rc
-                    .config_continue(&pending.remote_name, &outcome.state, answer, false)
+                    .config_continue(
+                        &pending.remote_name,
+                        &outcome.state,
+                        answer,
+                        false,
+                        serde_json::json!({}),
+                    )
                     .await
                 {
                     Ok(ConfigStep::Done(next)) => outcome = next,

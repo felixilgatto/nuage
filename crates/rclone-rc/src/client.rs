@@ -172,10 +172,11 @@ impl RcClient {
         state: &str,
         result: &str,
         background: bool,
+        parameters: Value,
     ) -> Result<ConfigStep, RcError> {
         let params = json!({
             "name": name,
-            "parameters": {},
+            "parameters": parameters,
             "opt": { "nonInteractive": true, "continue": true, "state": state, "result": result },
             "_async": background,
         });

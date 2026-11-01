@@ -610,6 +610,12 @@ fn user_folder_survives_an_rclone_crash() {
 
 /// `GET` over plain HTTP; returns the status line and the `Location` header.
 fn http_get(url: &str) -> (String, Option<String>) {
+    let (status, location, _) = http_get_body(url);
+    (status, location)
+}
+
+/// Status line, `Location` and body of a GET.
+fn http_get_body(url: &str) -> (String, Option<String>, String) {
     use std::io::{Read, Write};
     let rest = url.strip_prefix("http://").unwrap();
     let (host, path) = rest.split_once('/').unwrap();
@@ -625,7 +631,11 @@ fn http_get(url: &str) -> (String, Option<String>) {
     let location = response
         .lines()
         .find_map(|l| l.strip_prefix("Location: ").map(str::to_owned));
-    (status, location)
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_owned())
+        .unwrap_or_default();
+    (status, location, body)
 }
 
 #[test]
@@ -697,6 +707,44 @@ fn google_sign_in_can_be_cancelled() {
         std::fs::read_to_string(env.path("home/.config/nuage/rclone.conf")).unwrap_or_default();
     assert!(!conf.contains("[nuage-"), "the remote is deleted:\n{conf}");
     assert!(!env.path("home/Cloud/Drive").exists());
+
+    // The browser lands on Nuage's page, not rclone's: here a failure (the
+    // answer does not match the sign-in).
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nuage"));
+    env.apply_env(&mut cmd);
+    let mut child = cmd
+        .args([
+            "account",
+            "add",
+            "gdrive",
+            "--name",
+            "Drive",
+            "--client-id",
+            "nuage-test.apps.googleusercontent.com",
+            "--client-secret",
+            "secret",
+            "--no-browser",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut text = String::new();
+    while !text.contains("Waiting for the sign-in") {
+        let mut line = String::new();
+        let n = std::io::BufRead::read_line(&mut stderr, &mut line).unwrap();
+        assert!(n > 0, "no sign-in link in:\n{text}{}", env.log());
+        text.push_str(&line);
+    }
+    let (_, _, page) = http_get_body("http://127.0.0.1:53682/?state=wrong&code=nothing");
+    assert!(page.contains("The sign-in did not work"), "{page}");
+    assert!(page.contains("go back to Nuage") || page.contains("Go back to Nuage"));
+    assert!(!page.contains("go back to rclone"), "{page}");
+    let status = child.wait().unwrap();
+    assert!(!status.success());
+    assert_eq!(env.json(&["account", "list"]), Value::Array(vec![]));
 }
 
 #[test]

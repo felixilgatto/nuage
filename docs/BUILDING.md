@@ -99,10 +99,16 @@ flatpak build-bundle target/flatpak-repo nuage.flatpak io.github.felixilgatto.Nu
 ```
 
 CI builds the bundle (artifact `nuage.flatpak`) and runs
-`flatpak-builder-lint`. Two of its findings are expected for now: access to
-`flatpak-spawn` (a warning; the `fusermount3` wrapper needs it, see
-[ARCHITECTURE.md](ARCHITECTURE.md)) and the missing screenshots (an error
-that CI tolerates until screenshots are added to the metainfo).
+`scripts/flatpak-lint.sh` (`flatpak-builder-lint` on the manifest, the
+metainfo and the repository). It accepts only these findings for now:
+access to `flatpak-spawn` (the `fusermount3` wrapper, see
+[ARCHITECTURE.md](ARCHITECTURE.md)), access to `home` (mount folders are
+chosen freely) and the missing screenshots. Locally:
+
+```sh
+LINT="flatpak run --command=flatpak-builder-lint org.flatpak.Builder" \
+  scripts/flatpak-lint.sh target/flatpak-repo
+```
 
 ## Releases
 

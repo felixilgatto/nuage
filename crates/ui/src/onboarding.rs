@@ -321,7 +321,13 @@ fn sign_in_page(
             .await;
         session.borrow_mut().take();
         match done {
-            Ok(Reply::Account(account)) => show_folder_page(&ui, account),
+            Ok(Reply::Account(account)) => {
+                ui.come_back(
+                    &gettext("Signed in to {}").replace("{}", &account.display_name),
+                    &gettext("Back to Nuage to choose the folder and start the sync."),
+                );
+                show_folder_page(&ui, account);
+            }
             Ok(_) => {}
             Err(e) => {
                 // Back to the client screen, with what to fix.

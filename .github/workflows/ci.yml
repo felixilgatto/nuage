@@ -134,17 +134,5 @@ jobs:
           upload-artifact: true
 
       - name: Flathub linter
-        # Tolerated in v1 (docs/BUILDING.md): the screenshots, not taken yet.
-        # The flatpak-spawn warning (fusermount3 wrapper) is only a warning.
-        run: |
-          flatpak-builder-lint manifest build-aux/flatpak/io.github.felixilgatto.Nuage.yml
-          flatpak-builder-lint appstream data/io.github.felixilgatto.Nuage.metainfo.xml
-          flatpak-builder-lint repo repo > lint.json || true
-          cat lint.json
-          python3 - lint.json <<'PY'
-          import json, sys
-          tolerated = {"metainfo-missing-screenshots", "appstream-screenshots-not-mirrored-in-ostree"}
-          errors = set(json.load(open(sys.argv[1])).get("errors", [])) - tolerated
-          if errors:
-              sys.exit(f"flatpak-builder-lint: {sorted(errors)}")
-          PY
+        # Fails on anything but the exceptions accepted for v1 (see the script).
+        run: scripts/flatpak-lint.sh repo

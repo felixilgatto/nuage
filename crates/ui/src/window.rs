@@ -128,6 +128,38 @@ impl Ui {
         self.window.present();
     }
 
+    /// Brings the window back after the user left it for the browser.
+    ///
+    /// On Wayland an application cannot raise itself without an activation
+    /// token, which only comes from the user (e.g. clicking a notification):
+    /// `present` may only flash it. So a notification also says what to do
+    /// next; clicking it raises the window, and it is withdrawn as soon as
+    /// the window is active again.
+    pub fn come_back(&self, title: &str, body: &str) {
+        const ID: &str = "come-back";
+        self.window.present();
+        if self.window.is_active() {
+            return;
+        }
+        let notification = gio::Notification::new(title);
+        notification.set_body(Some(body));
+        notification.set_priority(gio::NotificationPriority::High);
+        notification.set_default_action("app.open-window");
+        self.app.send_notification(Some(ID), &notification);
+        let app = self.app.clone();
+        let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::default();
+        let h = Rc::clone(&handler);
+        let id = self.window.connect_is_active_notify(move |window| {
+            if window.is_active() {
+                app.withdraw_notification(ID);
+                if let Some(id) = h.borrow_mut().take() {
+                    window.disconnect(id);
+                }
+            }
+        });
+        *handler.borrow_mut() = Some(id);
+    }
+
     fn home_page(self: &Rc<Self>) -> adw::NavigationPage {
         let header = adw::HeaderBar::new();
         let add = gtk::Button::from_icon_name("list-add-symbolic");
