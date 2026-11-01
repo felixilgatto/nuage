@@ -8,6 +8,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
   the browser, `nuage pin`). They open and can be edited without a
   connection, also after a restart; changes upload when it comes back, and a
   file changed in two places keeps both versions.
+- A warning when the items kept offline take more than a chosen space
+  (`offline-warning`).
 - Offline, the other items stay listed and fail to open at once, without
   blocking file managers.
 - After signing in, the browser shows a Nuage page and Nuage comes back to

@@ -54,6 +54,8 @@ pub(crate) struct Pins {
     status: std::sync::Mutex<HashMap<(AccountId, String), PinStatus>>,
     conflicts: std::sync::Mutex<HashMap<AccountId, u32>>,
     last_check: std::sync::Mutex<Option<Instant>>,
+    /// Accounts warned about the space their offline items take.
+    warned: std::sync::Mutex<std::collections::HashSet<AccountId>>,
 }
 
 impl Pins {
@@ -64,7 +66,19 @@ impl Pins {
             status: Default::default(),
             conflicts: Default::default(),
             last_check: Default::default(),
+            warned: Default::default(),
         })
+    }
+
+    /// Whether to warn about `used` bytes kept offline (once per crossing
+    /// of `limit`).
+    pub fn should_warn(&self, account: &AccountId, used: u64, limit: Option<u64>) -> bool {
+        crossed(
+            &mut self.warned.lock().expect("pin warning lock"),
+            account,
+            used,
+            limit,
+        )
     }
 
     /// Bytes kept offline, pending changes and conflicts of an account.
@@ -82,6 +96,23 @@ impl Pins {
             .copied()
             .unwrap_or(0);
         (size, pending, conflicts)
+    }
+}
+
+/// `true` the first time `used` goes over `limit`; again only after it
+/// went back under.
+fn crossed(
+    warned: &mut std::collections::HashSet<AccountId>,
+    account: &AccountId,
+    used: u64,
+    limit: Option<u64>,
+) -> bool {
+    match limit {
+        Some(limit) if used > limit => warned.insert(account.clone()),
+        _ => {
+            warned.remove(account);
+            false
+        }
     }
 }
 
@@ -1109,6 +1140,18 @@ fn remove_empty_parents(store: &Path, path: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warns_once_per_crossing() {
+        let mut warned = std::collections::HashSet::new();
+        let a = AccountId::new("a");
+        assert!(!crossed(&mut warned, &a, 5, Some(10)));
+        assert!(crossed(&mut warned, &a, 11, Some(10)));
+        assert!(!crossed(&mut warned, &a, 12, Some(10)), "once");
+        assert!(!crossed(&mut warned, &a, 9, Some(10)));
+        assert!(crossed(&mut warned, &a, 11, Some(10)), "again after going under");
+        assert!(!crossed(&mut warned, &a, 1 << 40, None), "off");
+    }
 
     #[test]
     fn names_and_paths() {

@@ -25,6 +25,9 @@ use crate::window::Ui;
 /// Values of the daemon's `quit-with-pending` setting, in display order.
 const QUIT_CHOICES: [&str; 3] = ["finish-in-background", "ask", "quit-now"];
 
+/// Choices of "Warn when offline items exceed": `offline-warning`.
+const WARNING_CHOICES: [&str; 5] = ["off", "1G", "5G", "10G", "50G"];
+
 /// Choices of "Check the connection every": `offline-check-interval`.
 const CHECK_CHOICES: [&str; 4] = ["30s", "1m", "5m", "15m"];
 
@@ -199,6 +202,39 @@ fn general_page(ui: &Rc<Ui>, dialog: &adw::PreferencesDialog) -> adw::Preference
         ))
         .build();
     quit_group.add(&check);
+    let warning_labels = [
+        gettext("Never"),
+        gettext("1 GB"),
+        gettext("5 GB"),
+        gettext("10 GB"),
+        gettext("50 GB"),
+    ];
+    let warning = adw::ComboRow::builder()
+        .title(gettext("Warn When Offline Items Exceed"))
+        .subtitle(gettext("Per account"))
+        .model(&gtk::StringList::new(
+            &warning_labels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ))
+        .build();
+    quit_group.add(&warning);
+    {
+        let (ui, dialog, warning) = (Rc::clone(ui), dialog.clone(), warning.clone());
+        glib::spawn_future_local(async move {
+            if let Some(value) = get(&ui, "offline-warning").await
+                && let Some(i) = WARNING_CHOICES.iter().position(|c| *c == value)
+            {
+                warning.set_selected(i as u32);
+            }
+            warning.connect_selected_notify(move |row| {
+                if let Some(value) = WARNING_CHOICES.get(row.selected() as usize) {
+                    set(&ui, &dialog, "offline-warning".into(), (*value).into());
+                }
+            });
+        });
+    }
     {
         let (ui, dialog, check) = (Rc::clone(ui), dialog.clone(), check.clone());
         glib::spawn_future_local(async move {

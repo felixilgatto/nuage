@@ -1005,6 +1005,19 @@ fn print_status(report: &StatusReport, daemon_version: &str) {
             human_size(status.cache_used),
             human_size(account.cache_limit)
         );
+        if status.offline_used > 0 || status.pins_pending > 0 {
+            let mut line = format!("  Offline: {}", human_size(status.offline_used));
+            if status.pins_pending > 0 {
+                line.push_str(&format!(", {} change(s) to upload", status.pins_pending));
+            }
+            if status.pins_conflicts > 0 {
+                line.push_str(&format!(
+                    ", {} conflict(s) (both versions kept)",
+                    status.pins_conflicts
+                ));
+            }
+            println!("{line}");
+        }
     }
     if !report.config_encrypted {
         println!(

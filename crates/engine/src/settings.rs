@@ -8,6 +8,7 @@
 //! | `<account>:cache-max-age` | the same for one account (`default`: the global one) |
 //! | `<account>:default-exclusions` | `on` or `off` |
 //! | `quit-with-pending` | `finish-in-background`, `ask` or `quit-now` |
+//! | `offline-warning` | warn when an account keeps more offline (`10G`, `off`) |
 //! | `offline-check-interval` | how often the connection is checked and pinned items synced (`30s`) |
 //!
 //! Changing the cache settings of a mounted account remounts its hidden
@@ -24,6 +25,7 @@ const CACHE_MAX_AGE: &str = "cache-max-age";
 const QUIT_WITH_PENDING: &str = "quit-with-pending";
 const DEFAULT_EXCLUSIONS: &str = "default-exclusions";
 const OFFLINE_CHECK: &str = "offline-check-interval";
+const OFFLINE_WARNING: &str = "offline-warning";
 
 fn entry(key: impl Into<String>, value: impl Into<String>) -> ConfigEntry {
     ConfigEntry {
@@ -43,6 +45,11 @@ fn all_entries(st: &State, recommended_age: Option<u64>) -> Vec<ConfigEntry> {
                 .map_or_else(|| "default".to_owned(), format_duration),
         ),
         entry(QUIT_WITH_PENDING, s.quit_with_pending.as_str()),
+        entry(
+            OFFLINE_WARNING,
+            s.offline_warning_bytes
+                .map_or_else(|| "off".to_owned(), format_size),
+        ),
         entry(
             OFFLINE_CHECK,
             format_duration(
@@ -86,7 +93,7 @@ fn parse_age(value: &str) -> Result<Option<u64>> {
 
 fn unknown_key(key: &str) -> Error {
     Error::InvalidArgument(format!(
-        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, {CACHE_MAX_AGE}, <account>:{CACHE_MAX_AGE}, <account>:{DEFAULT_EXCLUSIONS}, {QUIT_WITH_PENDING}, {OFFLINE_CHECK}."
+        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, {CACHE_MAX_AGE}, <account>:{CACHE_MAX_AGE}, <account>:{DEFAULT_EXCLUSIONS}, {QUIT_WITH_PENDING}, {OFFLINE_CHECK}, {OFFLINE_WARNING}."
     ))
 }
 
@@ -200,6 +207,17 @@ impl Inner {
                             .map(|(i, _)| i),
                     );
                     entry(key, text)
+                }
+                OFFLINE_WARNING => {
+                    s.offline_warning_bytes = match value {
+                        "off" | "none" | "0" => None,
+                        v => Some(parse_size(v).ok_or_else(|| bad_size(v))?),
+                    };
+                    entry(
+                        key,
+                        s.offline_warning_bytes
+                            .map_or_else(|| "off".to_owned(), format_size),
+                    )
                 }
                 OFFLINE_CHECK => {
                     let secs = parse_duration(value).filter(|s| *s > 0).ok_or_else(|| {

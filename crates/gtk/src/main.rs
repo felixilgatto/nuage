@@ -159,6 +159,7 @@ fn startup(app: &adw::Application, background: bool) {
                         event @ (Event::AuthRequired { .. }
                         | Event::UploadFailed { .. }
                         | Event::CacheFull { .. }
+                        | Event::OfflineSpaceWarning { .. }
                         | Event::PinStateChanged {
                             state: nuage_core::PinState::Conflict,
                             ..
@@ -425,6 +426,27 @@ fn notify(ui: &Ui, event: &Event) {
                 Some(&account.as_str().to_variant()),
             );
             (format!("cache-{account}"), n)
+        }
+        Event::OfflineSpaceWarning {
+            account,
+            used,
+            limit,
+        } => {
+            let n = gio::Notification::new(&gettext("Offline items take a lot of space"));
+            n.set_body(Some(
+                &gettext(
+                    "{account} keeps {used} on this computer (warning above {limit}). Remove offline copies you no longer need.",
+                )
+                .replace("{account}", &name(account))
+                .replace("{used}", &nuage_ui::human_size(*used))
+                .replace("{limit}", &nuage_ui::human_size(*limit)),
+            ));
+            n.add_button_with_target_value(
+                &gettext("Preferences"),
+                "app.account-preferences",
+                Some(&account.as_str().to_variant()),
+            );
+            (format!("offline-space-{account}"), n)
         }
         Event::PinStateChanged { account, path, .. } => {
             let n = gio::Notification::new(&gettext("A file changed in two places"));

@@ -29,6 +29,9 @@ pub struct Settings {
     /// How often the connection is checked and pinned items synced, in
     /// seconds. `None`: 30 s.
     pub offline_check_interval_secs: Option<u64>,
+    /// Warn when an account keeps more than this offline, in bytes.
+    /// `None`: no warning.
+    pub offline_warning_bytes: Option<u64>,
 }
 
 impl Default for Settings {
@@ -38,6 +41,7 @@ impl Default for Settings {
             cache_max_age_secs: None,
             quit_with_pending: QuitBehavior::default(),
             offline_check_interval_secs: None,
+            offline_warning_bytes: None,
         }
     }
 }

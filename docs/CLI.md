@@ -103,6 +103,7 @@ Offline, items that are not pinned stay listed (greyed in the browser, as
 | `cache-max-age` | how long unused files stay in the cache, e.g. `30d` |
 | `<account>:cache-limit`, `<account>:cache-max-age` | the same for one account (`default`: the global value) |
 | `offline-check-interval` | how often the connection is checked and pinned items synced, e.g. `30s` |
+| `offline-warning` | warn (notification, `nuage status`) when an account keeps more offline, e.g. `10G`, or `off` (default) |
 | `<account>:default-exclusions` | `on` or `off`: exclude temporary and lock files |
 | `quit-with-pending` | what `nuage daemon stop` does while uploads are pending: `finish-in-background` (default), `ask` or `quit-now` |
 

@@ -178,6 +178,7 @@ impl Inner {
 
         let mut st = self.state.lock().await;
         let mut accounts = Vec::with_capacity(snapshots.len());
+        let limit = st.config.settings.offline_warning_bytes;
         for (s, (stats, quota, auth)) in snapshots.iter().zip(polled) {
             // The account may have been removed while polling.
             if !st
@@ -226,6 +227,13 @@ impl Inner {
                 )
             };
             let (offline_used, pins_pending, pins_conflicts) = self.pins.summary(&s.account.id);
+            if self.pins.should_warn(&s.account.id, offline_used, limit) {
+                self.emit(Event::OfflineSpaceWarning {
+                    account: s.account.id.clone(),
+                    used: offline_used,
+                    limit: limit.unwrap_or_default(),
+                });
+            }
             accounts.push(AccountStatus {
                 account: s.account.clone(),
                 state,

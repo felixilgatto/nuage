@@ -45,6 +45,13 @@ pub enum Event {
     CacheFull {
         account: AccountId,
     },
+    /// The items kept offline take more space than the `offline-warning`
+    /// setting (sent once each time the threshold is crossed).
+    OfflineSpaceWarning {
+        account: AccountId,
+        used: u64,
+        limit: u64,
+    },
     /// State of a pinned item changed (v1.1).
     PinStateChanged {
         account: AccountId,
