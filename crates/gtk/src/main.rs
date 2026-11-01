@@ -1,10 +1,9 @@
 //! `nuage-gtk`: the Nuage desktop application (window + tray icon).
 //!
-//! A client of `nuaged`, which it starts if needed. At the first launch
-//! (no account) it opens the setup; afterwards it lives in the system tray
-//! with its window closed, unless there is no tray to show the icon.
-//! `--background` (used to start at login) never opens the window when
-//! the tray is available.
+//! A client of `nuaged`, which it starts if needed. Launched by the user,
+//! it opens the setup (no account yet) or the main window; closing the
+//! window leaves it in the system tray. `--background` (used to start at
+//! login) opens nothing when the tray is available.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -111,9 +110,12 @@ fn startup(app: &adw::Application, background: bool) {
                 .unwrap_or(false);
             ui.set_tray_available(tray);
             ui.reload().await;
-            if ui.accounts().is_empty() && !background {
+            if background && tray {
+                return;
+            }
+            if ui.accounts().is_empty() {
                 nuage_ui::onboarding::start(&ui);
-            } else if !tray {
+            } else {
                 ui.present();
             }
         });
