@@ -114,6 +114,10 @@ pub enum AccountCommand {
     Add(AccountAdd),
     /// List accounts.
     List,
+    /// List the other drives an account gives access to (Google shared
+    /// drives); add one with `nuage account add <provider> --from <account>
+    /// --drive <name>`.
+    Drives { account: String },
     /// Rename an account.
     Rename { account: String, name: String },
     /// Mount an account at another folder.
@@ -175,6 +179,13 @@ pub struct AccountAdd {
     /// Provider setting, e.g. `--param root=/srv/files` for the local provider.
     #[arg(long = "param", value_name = "KEY=VALUE", value_parser = parse_param)]
     pub params: Vec<(String, String)>,
+    /// Add another drive of this existing account (e.g. a Google shared
+    /// drive), without signing in again. With --drive.
+    #[arg(long, value_name = "ACCOUNT", requires = "drive")]
+    pub from: Option<String>,
+    /// The drive to add, by name or id (see `nuage account drives`).
+    #[arg(long, value_name = "NAME", requires = "from")]
+    pub drive: Option<String>,
 }
 
 fn parse_param(s: &str) -> Result<(String, String), String> {

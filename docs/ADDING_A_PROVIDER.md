@@ -35,6 +35,7 @@ the abstraction is missing something; extend `nuage-core` (e.g.
 | `recommended_vfs_opts()` | VFS options for the mounts of this provider |
 | `native_docs()` | how provider-native documents appear, e.g. web shortcuts |
 | `client_guide()` *(optional)* | steps and URLs to create the user's own OAuth client; shown in the setup |
+| `sub_drives()` *(optional)* | other drives its accounts reach (rclone listing command, selecting parameter), each added as an account of its own |
 | `client_id_suffix()` *(optional)* | end of a valid client ID, to check what the user pastes |
 | `validate(input)` *(optional)* | checks the input before anything is created; the error says what to fix |
 | `info()` *(provided)* | the description sent to clients; do not override |

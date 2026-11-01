@@ -1,4 +1,5 @@
-//! Google Drive provider ("My Drive" only in v1). User documentation:
+//! Google Drive provider: "My Drive", and each shared drive as an account
+//! of its own. User documentation:
 //! docs/PROVIDERS.md and docs/GOOGLE_OAUTH.md.
 
 use nuage_core::{
@@ -54,7 +55,8 @@ impl Provider for GoogleDrive {
         if let Some(NativeDocPolicy::WebShortcut { export_formats, .. }) = self.native_docs() {
             params.push(("export_formats".to_owned(), export_formats));
         }
-        // v1 mounts "My Drive" only: do not ask about shared drives.
+        // "My Drive"; shared drives are accounts of their own (sub_drives):
+        // do not ask about them.
         params.push(("config_change_team_drive".to_owned(), "false".to_owned()));
         params
     }
@@ -108,6 +110,14 @@ impl Provider for GoogleDrive {
                 "https://console.cloud.google.com/auth/clients",
             ),
         ]
+    }
+
+    fn sub_drives(&self) -> Option<nuage_core::SubDrives> {
+        Some(nuage_core::SubDrives {
+            label: "Shared drives".to_owned(),
+            list_command: "drives".to_owned(),
+            param: "team_drive".to_owned(),
+        })
     }
 
     fn client_id_suffix(&self) -> Option<&'static str> {

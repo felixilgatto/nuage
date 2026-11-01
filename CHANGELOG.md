@@ -5,6 +5,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 ## [Unreleased]
 
 - OneDrive (personal): sign in in the browser, no client to create.
+- Google shared drives, each as an account of its own, added from a Google
+  account without signing in again.
 - Offline mode: keep files and folders on this computer ("Keep Offline" in
   the browser, `nuage pin`). They open and can be edited without a
   connection, also after a restart; changes upload when it comes back, and a

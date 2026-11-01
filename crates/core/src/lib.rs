@@ -31,7 +31,7 @@ pub use exclusion::{DEFAULT_PATTERNS, Exclusion, ExclusionRule, ExclusionSet};
 pub use pin::{Pin, PinKind, PinState};
 pub use provider::{
     AuthKind, AuthSpec, CacheMode, CredentialField, CustomClient, GuideStep, NativeDocPolicy,
-    SetupInput, VfsOptions,
+    SetupInput, SubDrive, SubDrives, VfsOptions,
 };
 pub use quota::Quota;
 pub use state::SyncState;

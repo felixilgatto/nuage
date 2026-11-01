@@ -125,6 +125,27 @@ impl Default for VfsOptions {
     }
 }
 
+/// Other drives an account gives access to (Google shared drives…). Each
+/// one becomes an account of its own, made from an existing account
+/// without signing in again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubDrives {
+    /// What the user calls them, e.g. "Shared drives".
+    pub label: String,
+    /// rclone backend command listing them (`backend/command`), answering
+    /// objects with `id` and `name`, e.g. `"drives"`.
+    pub list_command: String,
+    /// rclone parameter selecting one, e.g. `"team_drive"`.
+    pub param: String,
+}
+
+/// A drive listed by [`SubDrives::list_command`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubDrive {
+    pub id: String,
+    pub name: String,
+}
+
 /// How provider-native documents (Google Docs…) are exposed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

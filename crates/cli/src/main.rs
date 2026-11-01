@@ -647,9 +647,43 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                 .map(std::path::absolute)
                 .transpose()
                 .map_err(|e| usage(format!("Invalid mount folder: {e}")))?;
+            // A drive of an existing account: found by name or id.
+            let (from_account, sub_drive, name) = match (&add.from, &add.drive) {
+                (Some(from), Some(wanted)) => {
+                    let Reply::SubDrives(drives) = request(
+                        cli,
+                        Command::ListSubDrives {
+                            account: account(from),
+                        },
+                    )
+                    .await?
+                    else {
+                        return Err(unexpected());
+                    };
+                    let drive = drives
+                        .iter()
+                        .find(|d| &d.id == wanted || &d.name == wanted)
+                        .or_else(|| {
+                            drives
+                                .iter()
+                                .find(|d| d.name.eq_ignore_ascii_case(wanted))
+                        })
+                        .ok_or_else(|| {
+                            usage(format!(
+                                "\"{from}\" has no drive \"{wanted}\". See: nuage account drives \"{from}\""
+                            ))
+                        })?;
+                    (
+                        Some(account(from)),
+                        Some(drive.id.clone()),
+                        add.name.clone().or_else(|| Some(drive.name.clone())),
+                    )
+                }
+                _ => (None, None, add.name.clone()),
+            };
             let args = AccountAddArgs {
                 provider: add.provider.clone(),
-                name: add.name.clone(),
+                name,
                 mount_point,
                 token,
                 client_id: add.client_id.clone(),
@@ -657,9 +691,13 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                 no_browser: add.no_browser,
                 params: add.params.iter().cloned().collect(),
                 no_mount: false,
+                from_account,
+                sub_drive,
             };
             let mut client = connect(cli).await?;
-            let reply = client.request(Command::AccountAdd(args)).await??;
+            let reply = client
+                .request(Command::AccountAdd(Box::new(args)))
+                .await??;
             let a = finish_sign_in(cli, client, reply, add.no_browser).await?;
             if cli.json {
                 print_json(&a);
@@ -669,6 +707,31 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                     a.display_name,
                     a.provider_id,
                     a.mount_point.display()
+                );
+            }
+            Ok(())
+        }
+        AccountCommand::Drives { account: name } => {
+            let Reply::SubDrives(drives) = request(
+                cli,
+                Command::ListSubDrives {
+                    account: account(name),
+                },
+            )
+            .await?
+            else {
+                return Err(unexpected());
+            };
+            if cli.json {
+                print_json(&drives);
+            } else if drives.is_empty() {
+                println!("\"{name}\" gives access to no other drive.");
+            } else {
+                for d in &drives {
+                    println!("{}  ({})", d.name, d.id);
+                }
+                println!(
+                    "\nAdd one with: nuage account add <provider> --from \"{name}\" --drive \"<name>\""
                 );
             }
             Ok(())

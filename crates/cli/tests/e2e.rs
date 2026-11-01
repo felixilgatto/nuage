@@ -1356,3 +1356,24 @@ fn onedrive_sign_in_starts_without_a_client() {
     assert_eq!(child.wait().unwrap().code(), Some(4));
     assert_eq!(env.json(&["account", "list"]), Value::Array(vec![]));
 }
+
+#[test]
+fn other_drives_need_a_provider_that_has_them() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    env.add_local("Plain");
+    assert_eq!(
+        env.json_error(&["account", "drives", "Plain"], 1),
+        "unsupported"
+    );
+    assert_eq!(
+        env.json_error(
+            &["account", "add", "local", "--from", "Plain", "--drive", "x"],
+            1
+        ),
+        "unsupported"
+    );
+    // --from needs --drive.
+    let out = env.nuage(&["account", "add", "gdrive", "--from", "Plain"]);
+    assert_eq!(out.status.code(), Some(2), "{}", env.describe(&out));
+}

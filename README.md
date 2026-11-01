@@ -19,8 +19,8 @@ Files, work on your documents as usual: Nuage keeps them in sync.
 - Keep files and folders available offline (e.g. a password database).
 - Works on servers too, from the command line.
 
-Providers: **Google Drive** and **OneDrive** today; others and shared drives
-later ([details](docs/PROVIDERS.md)).
+Providers: **Google Drive** (with shared drives) and **OneDrive** today;
+others later ([details](docs/PROVIDERS.md)).
 
 ## Install
 

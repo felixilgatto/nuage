@@ -315,7 +315,7 @@ impl Engine {
             Command::Status => Ok(Reply::Status(inner.poll_status().await)),
             Command::ListProviders => Ok(Reply::Providers(inner.registry.infos())),
             Command::AccountList => Ok(Reply::Accounts(inner.list_accounts().await)),
-            Command::AccountAdd(args) => inner.add_account(args).await,
+            Command::AccountAdd(args) => inner.add_account(*args).await,
             Command::AccountRename { account, name } => inner
                 .rename_account(&account, &name)
                 .await
@@ -344,6 +344,9 @@ impl Engine {
                 inner.cancel_sign_in(&session).await.map(|()| Reply::Done)
             }
 
+            Command::ListSubDrives { account } => {
+                inner.list_sub_drives(&account).await.map(Reply::SubDrives)
+            }
             Command::OAuthClientGet { provider } => {
                 inner.oauth_client(&provider).await.map(Reply::OAuthClient)
             }

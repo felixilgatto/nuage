@@ -467,6 +467,20 @@ impl RcClient {
         self.job(method, params).await.map(drop)
     }
 
+    /// `backend/command`: a backend-specific command (e.g. `drives` of
+    /// Google Drive); returns its `result`.
+    pub async fn backend_command(&self, fs: &str, command: &str) -> Result<Value, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            result: Value,
+        }
+        let a: Answer = self
+            .call("backend/command", &json!({ "command": command, "fs": fs }))
+            .await?;
+        Ok(a.result)
+    }
+
     /// `operations/publiclink`: a share link.
     pub async fn public_link(&self, fs: &str, remote: &str) -> Result<String, RcError> {
         #[derive(Deserialize)]

@@ -24,6 +24,8 @@ below, `exclude add | remove | list`, `config get | set` and
 nuage account add local --param root=/tmp/files      # a local folder (tests)
 nuage account add gdrive --client-id <id> --client-secret <secret>
 nuage account add onedrive                           # signs in in the browser
+nuage account drives "Google Drive"                  # its shared drives
+nuage account add gdrive --from "Google Drive" --drive "Team"   # one, as an account
 nuage account list
 nuage account rename "Google Drive" "Work"
 nuage account remove "Work"

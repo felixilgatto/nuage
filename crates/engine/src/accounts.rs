@@ -151,6 +151,48 @@ impl Inner {
             client_secret: args.client_secret,
             credentials: args.params,
         };
+        // A drive of an existing account (a shared drive): its sign-in.
+        let mut sub_drive: Option<(String, String)> = None;
+        if let Some(source) = &args.from_account {
+            let spec = provider.sub_drives().ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "{} accounts have no other drives.",
+                    provider.display_name()
+                ))
+            })?;
+            let drive = args.sub_drive.clone().ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "Name the drive to add: one of `nuage account drives \"{}\"`.",
+                    source.as_str()
+                ))
+            })?;
+            let record = st.record(st.resolve(source)?);
+            if record.account.provider_id != provider.id() {
+                return Err(Error::InvalidArgument(format!(
+                    "\"{}\" is not a {} account.",
+                    record.account.display_name,
+                    provider.display_name()
+                )));
+            }
+            let stored = rc.config_get(&record.account.remote_name).await?;
+            let get = |k: &str| {
+                stored
+                    .get(k)
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_owned)
+            };
+            input.token = get("token");
+            input.client_id = get("client_id");
+            input.client_secret = get("client_secret");
+            if input.token.is_none() {
+                return Err(Error::AuthRequired(format!(
+                    "\"{}\" must be signed in again first.",
+                    record.account.display_name
+                )));
+            }
+            sub_drive = Some((spec.param, drive));
+        }
         let mut sign_in = false;
         match provider.auth() {
             AuthSpec::None => {}
@@ -218,6 +260,9 @@ impl Inner {
         if input.token.is_some() {
             // The token is final: do not ask rclone to refresh it in a browser.
             parameters.insert("config_refresh_token".into(), "false".into());
+        }
+        if let Some((param, drive)) = &sub_drive {
+            parameters.insert(param.clone(), drive.clone().into());
         }
         if sign_in {
             // Nuage shows the page; rclone must not try to open a browser.
@@ -579,6 +624,54 @@ impl Inner {
         });
         self.poll_status().await;
         Ok(())
+    }
+}
+
+impl Inner {
+    /// The other drives an account gives access to (shared drives).
+    pub(crate) async fn list_sub_drives(
+        &self,
+        id: &AccountId,
+    ) -> Result<Vec<nuage_core::SubDrive>> {
+        let account = {
+            let st = self.state.lock().await;
+            st.record(st.resolve(id)?).account.clone()
+        };
+        let spec = self
+            .registry
+            .get(&account.provider_id)
+            .and_then(|p| p.sub_drives())
+            .ok_or_else(|| {
+                Error::Unsupported(format!("\"{}\" has no other drives.", account.display_name))
+            })?;
+        let rc = self.rc().await?;
+        let result = rc
+            .backend_command(&remote_fs(&account), &spec.list_command)
+            .await
+            .map_err(|e| {
+                let message = e.to_string();
+                if crate::status::is_auth_error(&message) {
+                    Error::AuthRequired(crate::status::auth_message(&account))
+                } else {
+                    Error::Rclone(format!(
+                        "cannot list the drives of \"{}\": {message}",
+                        account.display_name
+                    ))
+                }
+            })?;
+        let mut drives: Vec<nuage_core::SubDrive> = result
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| {
+                Some(nuage_core::SubDrive {
+                    id: d.get("id")?.as_str()?.to_owned(),
+                    name: d.get("name")?.as_str()?.to_owned(),
+                })
+            })
+            .collect();
+        drives.sort_by_key(|d| d.name.to_lowercase());
+        Ok(drives)
     }
 }
 

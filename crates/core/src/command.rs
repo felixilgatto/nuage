@@ -28,7 +28,8 @@ pub enum Command {
     ListProviders,
 
     // Accounts
-    AccountAdd(AccountAddArgs),
+    // Boxed: much larger than the other commands.
+    AccountAdd(Box<AccountAddArgs>),
     AccountList,
     AccountRename {
         account: AccountId,
@@ -63,6 +64,12 @@ pub enum Command {
         #[serde(default)]
         account: Option<AccountId>,
         mount_point: PathBuf,
+    },
+    /// The other drives an account gives access to (shared drives…), for
+    /// providers that have [`ProviderInfo::sub_drives`]. Replies
+    /// [`Reply::SubDrives`].
+    ListSubDrives {
+        account: AccountId,
     },
     /// The user's OAuth client of a provider (shared by its accounts).
     /// Replies [`Reply::OAuthClient`].
@@ -196,6 +203,13 @@ pub struct AccountAddArgs {
     /// at its last screen, with `Mount`).
     #[serde(default)]
     pub no_mount: bool,
+    /// Make the account from this existing account's sign-in (no new
+    /// sign-in), for one of its [`Command::ListSubDrives`] drives.
+    #[serde(default)]
+    pub from_account: Option<AccountId>,
+    /// The id of that drive.
+    #[serde(default)]
+    pub sub_drive: Option<String>,
 }
 
 /// Successful reply to a [`Command`].
@@ -218,6 +232,7 @@ pub enum Reply {
     Config(Vec<ConfigEntry>),
     Pins(Vec<Pin>),
     OAuthClient(OAuthClientInfo),
+    SubDrives(Vec<crate::SubDrive>),
 }
 
 /// Answer of [`Command::OAuthClientGet`].
@@ -310,6 +325,9 @@ pub struct ProviderInfo {
     /// The end of a valid client ID (e.g. `.apps.googleusercontent.com`).
     #[serde(default)]
     pub client_id_suffix: Option<String>,
+    /// Other drives its accounts give access to (Google shared drives).
+    #[serde(default)]
+    pub sub_drives: Option<crate::SubDrives>,
     pub capabilities: Capabilities,
 }
 
@@ -331,10 +349,10 @@ mod tests {
             Command::Mount {
                 account: AccountId::new("Google Drive"),
             },
-            Command::AccountAdd(AccountAddArgs {
+            Command::AccountAdd(Box::new(AccountAddArgs {
                 provider: "local".into(),
                 ..AccountAddArgs::default()
-            }),
+            })),
             Command::ExcludeAdd {
                 account: AccountId::new("Drive"),
                 rule: ExclusionRule::Glob("*.tmp".into()),

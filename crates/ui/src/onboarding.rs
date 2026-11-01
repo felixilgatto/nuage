@@ -103,6 +103,22 @@ fn provider_page(ui: &Rc<Ui>) -> adw::NavigationPage {
 }
 
 fn next_after_provider(ui: &Rc<Ui>, provider: &ProviderInfo) {
+    // Accounts of this provider may give access to other drives (shared
+    // drives): offer them, or a new account.
+    let existing: Vec<_> = ui
+        .accounts()
+        .into_iter()
+        .filter(|a| a.account.provider_id == provider.id)
+        .map(|a| a.account)
+        .collect();
+    if provider.sub_drives.is_some() && !existing.is_empty() {
+        ui.nav.push(&drive_page(ui, provider, existing));
+        return;
+    }
+    new_account(ui, provider);
+}
+
+fn new_account(ui: &Rc<Ui>, provider: &ProviderInfo) {
     match provider.auth {
         AuthKind::OAuthBrowser => {
             let has_account = ui
@@ -121,6 +137,102 @@ fn next_after_provider(ui: &Rc<Ui>, provider: &ProviderInfo) {
 }
 
 // Screen 2: the user's own OAuth client.
+
+// Screen 1b: a new account, or a shared drive of an existing one.
+
+fn drive_page(ui: &Rc<Ui>, provider: &ProviderInfo, accounts: Vec<Account>) -> adw::NavigationPage {
+    let label = provider
+        .sub_drives
+        .as_ref()
+        .map_or_else(String::new, |s| s.label.clone());
+    let content = vbox();
+    let new = adw::PreferencesGroup::new();
+    let row = adw::ActionRow::builder()
+        .title(gettext("Another {} Account").replace("{}", &provider.display_name))
+        .subtitle(gettext("Sign in with another account"))
+        .activatable(true)
+        .build();
+    row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    {
+        let (ui, provider) = (Rc::clone(ui), provider.clone());
+        row.connect_activated(move |_| new_account(&ui, &provider));
+    }
+    new.add(&row);
+    content.append(&new);
+
+    for account in accounts {
+        let group = adw::PreferencesGroup::builder()
+            .title(
+                gettext("{label} of {account}")
+                    .replace("{label}", &label)
+                    .replace("{account}", &account.display_name),
+            )
+            .build();
+        let loading = adw::ActionRow::builder().title(gettext("Loading…")).build();
+        group.add(&loading);
+        content.append(&group);
+        let (ui, provider) = (Rc::clone(ui), provider.clone());
+        glib::spawn_future_local(async move {
+            let answer = ui
+                .backend
+                .call(Command::ListSubDrives {
+                    account: account.id.clone(),
+                })
+                .await;
+            group.remove(&loading);
+            let drives = match answer {
+                Ok(Reply::SubDrives(d)) => d,
+                Ok(_) => Vec::new(),
+                Err(e) => {
+                    group.add(
+                        &adw::ActionRow::builder()
+                            .title(glib::markup_escape_text(&e))
+                            .build(),
+                    );
+                    return;
+                }
+            };
+            if drives.is_empty() {
+                group.add(
+                    &adw::ActionRow::builder()
+                        .title(gettext("None"))
+                        .css_classes(["dim-label"])
+                        .build(),
+                );
+            }
+            let taken: Vec<String> = ui
+                .accounts()
+                .iter()
+                .map(|a| a.account.display_name.clone())
+                .collect();
+            for drive in drives {
+                let row = adw::ActionRow::builder()
+                    .title(glib::markup_escape_text(&drive.name))
+                    .activatable(true)
+                    .build();
+                row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
+                row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+                let name = if taken.contains(&drive.name) {
+                    format!("{} ({})", drive.name, account.display_name)
+                } else {
+                    drive.name.clone()
+                };
+                let (ui, provider, from) = (Rc::clone(&ui), provider.clone(), account.id.clone());
+                row.connect_activated(move |_| {
+                    let args = AccountAddArgs {
+                        name: Some(name.clone()),
+                        from_account: Some(from.clone()),
+                        sub_drive: Some(drive.id.clone()),
+                        ..AccountAddArgs::default()
+                    };
+                    create(&ui, &provider, args, None);
+                });
+                group.add(&row);
+            }
+        });
+    }
+    page(&provider.display_name, &content)
+}
 
 fn client_id_valid(provider: &ProviderInfo, id: &str) -> bool {
     let id = id.trim();
@@ -297,7 +409,7 @@ fn sign_in_page(
     let ui = Rc::clone(ui);
     let this = nav_page.clone();
     glib::spawn_future_local(async move {
-        let started = ui.backend.call(Command::AccountAdd(args)).await;
+        let started = ui.backend.call(Command::AccountAdd(Box::new(args))).await;
         let sign_in = match started {
             Ok(Reply::SignIn(s)) => s,
             Ok(Reply::Account(account)) => return show_folder_page(&ui, account),
@@ -423,7 +535,7 @@ fn create(ui: &Rc<Ui>, provider: &ProviderInfo, args: AccountAddArgs, button: Op
     };
     let ui = Rc::clone(ui);
     glib::spawn_future_local(async move {
-        match ui.backend.call(Command::AccountAdd(args)).await {
+        match ui.backend.call(Command::AccountAdd(Box::new(args))).await {
             Ok(Reply::Account(account)) => show_folder_page(&ui, account),
             Ok(_) => {}
             Err(e) => ui.toast(&e),
@@ -654,6 +766,7 @@ mod tests {
             credentials: Vec::new(),
             client_guide: Vec::new(),
             client_id_suffix: Some(".apps.googleusercontent.com".into()),
+            sub_drives: None,
             capabilities: Capabilities::default(),
         };
         assert!(client_id_valid(&p, "123-abc.apps.googleusercontent.com"));

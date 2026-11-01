@@ -58,6 +58,12 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Other drives the accounts give access to, each becoming an account
+    /// of its own (e.g. Google shared drives).
+    fn sub_drives(&self) -> Option<nuage_core::SubDrives> {
+        None
+    }
+
     /// Checks what the user provided before anything is created. The error
     /// is shown to the user and says what to fix.
     fn validate(&self, _input: &SetupInput) -> Result<(), String> {
@@ -82,6 +88,7 @@ pub trait Provider: Send + Sync {
             },
             client_guide: self.client_guide(),
             client_id_suffix: self.client_id_suffix().map(str::to_owned),
+            sub_drives: self.sub_drives(),
             capabilities: self.static_capabilities(),
         }
     }
