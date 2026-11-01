@@ -5,7 +5,7 @@
 #   finish-args-flatpak-spawn-access     the fusermount3 wrapper
 #   finish-args-home-filesystem-access   mount folders chosen under $HOME
 #   appstream-screenshots-not-mirrored-in-ostree   Flathub mirrors them
-#                                                   at its own build
+#   appstream-external-screenshot-url               at its own build
 # Usage: scripts/flatpak-lint.sh [repo] (LINT="flatpak run --command=flatpak-builder-lint org.flatpak.Builder" locally)
 set -eu
 repo=${1:-repo}
@@ -40,6 +40,7 @@ tolerated = {
     "finish-args-flatpak-spawn-access",
     "finish-args-home-filesystem-access",
     "appstream-screenshots-not-mirrored-in-ostree",
+    "appstream-external-screenshot-url",
 }
 if os.environ.get("UNPUBLISHED") == "1":
     tolerated.add("appstream-missing-screenshots")
