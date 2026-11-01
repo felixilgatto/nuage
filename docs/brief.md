@@ -722,6 +722,10 @@ Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucu
 | 12 | **v1.1 — Hors ligne** | Épinglage dans `nuage-fs` : métadonnées SQLite, magasin d'épingles, renvoi, conflits, démarrage hors ligne, GUI + CLI. |
 | 13 | **v2** | OneDrive et autres fournisseurs, Drive partagés, puis Flathub. |
 
+**Décidé après le jalon 13 (2026-11-01).** Pas de publication pour l'instant : l'utilisateur se sert de Nuage au quotidien, on le polit, puis il décide. Flathub est préparé (`docs/FLATHUB.md`) mais reporté (permission `org.freedesktop.Flatpak` à justifier, pas de Flathub par défaut sur Ubuntu) ; un dépôt Flatpak sur GitHub Pages est l'intermédiaire envisagé si les mises à jour automatiques comptent.
+
+**Option à décider plus tard : AppImage.** Hors sandbox, elle monte directement avec le `fusermount3` de l'hôte (ni wrapper ni relais). Points durs : runtime type 2 statique pour ne pas dépendre de `libfuse2` (absent d'Ubuntu par défaut) ; le démon doit survivre à l'application, donc `nuaged`, `nuage` et rclone sont copiés dans `~/.local/share/nuage/bin/` au premier lancement (et remis à jour) ; GTK 4 et libadwaita embarqués (livrable de 80 à 120 Mo) ; mises à jour via les informations zsync des releases GitHub. Jalon dédié éventuel : build en CI, test de démarrage sur Ubuntu 24.04 et Fedora, fichier joint aux releases.
+
 ## Critères d'acceptation
 
 ### v1
