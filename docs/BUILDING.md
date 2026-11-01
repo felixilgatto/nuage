@@ -104,7 +104,9 @@ CI builds the bundle (artifact `nuage.flatpak`) and runs
 metainfo and the repository). It accepts only these findings for now:
 access to `flatpak-spawn` (the `fusermount3` wrapper, see
 [ARCHITECTURE.md](ARCHITECTURE.md)), access to `home` (mount folders are
-chosen freely) and the missing screenshots. Locally:
+chosen freely) and screenshots not mirrored in the repository (Flathub does
+it at its own build). Screenshots are in `data/screenshots/`, taken with
+`scripts/demo.sh` (sample files, light style, no personal data). Locally:
 
 ```sh
 LINT="flatpak run --command=flatpak-builder-lint org.flatpak.Builder" \

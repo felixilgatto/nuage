@@ -34,6 +34,28 @@
     <binary>nuage</binary>
     <binary>nuaged</binary>
   </provides>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source" width="1010" height="690">https://raw.githubusercontent.com/felixilgatto/nuage/main/data/screenshots/browser.png</image>
+      <caption>Browse your files, even when the account is not mounted</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="610" height="670">https://raw.githubusercontent.com/felixilgatto/nuage/main/data/screenshots/main.png</image>
+      <caption>Your accounts, their state and space</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1010" height="690">https://raw.githubusercontent.com/felixilgatto/nuage/main/data/screenshots/offline.png</image>
+      <caption>Items kept available offline</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="610" height="670">https://raw.githubusercontent.com/felixilgatto/nuage/main/data/screenshots/setup.png</image>
+      <caption>A guided setup, in a few screens</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="610" height="670">https://raw.githubusercontent.com/felixilgatto/nuage/main/data/screenshots/preferences.png</image>
+      <caption>Simple preferences</caption>
+    </screenshot>
+  </screenshots>
   <url type="homepage">https://github.com/felixilgatto/nuage</url>
   <url type="bugtracker">https://github.com/felixilgatto/nuage/issues</url>
   <url type="vcs-browser">https://github.com/felixilgatto/nuage</url>

@@ -4,7 +4,8 @@
 # for v1 (documented in docs/BUILDING.md):
 #   finish-args-flatpak-spawn-access     the fusermount3 wrapper
 #   finish-args-home-filesystem-access   mount folders chosen under $HOME
-#   *screenshots*                        not taken yet
+#   appstream-screenshots-not-mirrored-in-ostree   Flathub mirrors them
+#                                                   at its own build
 # Usage: scripts/flatpak-lint.sh [repo] (LINT="flatpak run --command=flatpak-builder-lint org.flatpak.Builder" locally)
 set -eu
 repo=${1:-repo}
@@ -23,7 +24,6 @@ import json, sys
 tolerated = {
     "finish-args-flatpak-spawn-access",
     "finish-args-home-filesystem-access",
-    "metainfo-missing-screenshots",
     "appstream-screenshots-not-mirrored-in-ostree",
 }
 text = sys.stdin.read().strip()
