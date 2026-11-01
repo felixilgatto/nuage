@@ -1,6 +1,18 @@
-use serde::de::DeserializeOwned;
+use std::time::Duration;
+
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use url::Url;
+
+use crate::types::{
+    About, ConfigOutcome, CoreVersion, FsInfo, MountInfo, MountRequest, QueueItem, VfsStats,
+};
+
+/// Timeout of calls that should answer quickly (stats, queue, version).
+const SHORT: Duration = Duration::from_secs(10);
+/// Timeout of calls that talk to the cloud provider.
+const LONG: Duration = Duration::from_secs(120);
 
 /// Errors of the rc client.
 #[derive(Debug, thiserror::Error)]
@@ -22,26 +34,6 @@ impl From<RcError> for nuage_core::Error {
     fn from(e: RcError) -> Self {
         nuage_core::Error::Rclone(e.to_string())
     }
-}
-
-/// Answer of `core/version`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CoreVersion {
-    /// e.g. `"v1.71.0"`.
-    pub version: String,
-    /// e.g. `[1, 71, 0]`.
-    #[serde(default)]
-    pub decomposed: Vec<u32>,
-    #[serde(rename = "isGit", default)]
-    pub is_git: bool,
-    #[serde(rename = "isBeta", default)]
-    pub is_beta: bool,
-    #[serde(default)]
-    pub os: String,
-    #[serde(default)]
-    pub arch: String,
-    #[serde(rename = "goVersion", default)]
-    pub go_version: String,
 }
 
 /// Client of one `rclone rcd` instance.
@@ -72,7 +64,10 @@ impl RcClient {
         if !base.path().ends_with('/') {
             base.set_path(&format!("{}/", base.path()));
         }
-        let http = reqwest::Client::builder().no_proxy().build()?;
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .build()?;
         Ok(Self {
             http,
             base,
@@ -87,12 +82,28 @@ impl RcClient {
         P: Serialize + ?Sized,
         R: DeserializeOwned,
     {
+        self.call_with_timeout(method, params, LONG).await
+    }
+
+    /// [`call`](Self::call) with an explicit timeout.
+    pub async fn call_with_timeout<P, R>(
+        &self,
+        method: &str,
+        params: &P,
+        timeout: Duration,
+    ) -> Result<R, RcError>
+    where
+        P: Serialize + ?Sized,
+        R: DeserializeOwned,
+    {
         let url = self.base.join(method)?;
-        tracing::debug!(%method, "rc call");
+        // Parameters are never logged: they may contain tokens and secrets.
+        tracing::trace!(%method, "rc call");
         let resp = self
             .http
             .post(url)
             .basic_auth(&self.user, Some(&self.pass))
+            .timeout(timeout)
             .json(params)
             .send()
             .await?;
@@ -117,7 +128,149 @@ impl RcClient {
 
     /// `core/version`: health check and version of the running rclone.
     pub async fn core_version(&self) -> Result<CoreVersion, RcError> {
-        self.call("core/version", &serde_json::json!({})).await
+        self.call_with_timeout("core/version", &json!({}), SHORT)
+            .await
+    }
+
+    /// `core/quit`: stops rcd. Pending VFS writes stay in the cache.
+    pub async fn core_quit(&self) -> Result<(), RcError> {
+        self.call_with_timeout::<_, IgnoredAny>("core/quit", &json!({}), SHORT)
+            .await
+            .map(drop)
+    }
+
+    // Remotes
+
+    /// `config/create` with `nonInteractive` and `obscure`: creates a remote
+    /// from `parameters` without asking any question.
+    ///
+    /// rclone saves the remote before the questions end: when the outcome is
+    /// not complete, the caller deletes it.
+    pub async fn config_create(
+        &self,
+        name: &str,
+        backend: &str,
+        parameters: &serde_json::Map<String, Value>,
+    ) -> Result<ConfigOutcome, RcError> {
+        self.call(
+            "config/create",
+            &json!({
+                "name": name,
+                "type": backend,
+                "parameters": parameters,
+                "opt": { "nonInteractive": true, "obscure": true },
+            }),
+        )
+        .await
+    }
+
+    /// `config/delete`.
+    pub async fn config_delete(&self, name: &str) -> Result<(), RcError> {
+        self.call_with_timeout::<_, IgnoredAny>("config/delete", &json!({ "name": name }), SHORT)
+            .await
+            .map(drop)
+    }
+
+    /// `config/listremotes`.
+    pub async fn config_listremotes(&self) -> Result<Vec<String>, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            remotes: Vec<String>,
+        }
+        let a: Answer = self
+            .call_with_timeout("config/listremotes", &json!({}), SHORT)
+            .await?;
+        Ok(a.remotes)
+    }
+
+    // Backend information
+
+    /// `operations/fsinfo`: backend features and hashes.
+    pub async fn fsinfo(&self, fs: &str) -> Result<FsInfo, RcError> {
+        self.call("operations/fsinfo", &json!({ "fs": fs })).await
+    }
+
+    /// `operations/about`: quota. Check the `About` feature first.
+    pub async fn about(&self, fs: &str) -> Result<About, RcError> {
+        self.call("operations/about", &json!({ "fs": fs })).await
+    }
+
+    // Mounts
+
+    /// `mount/mount`.
+    pub async fn mount(&self, request: &MountRequest) -> Result<(), RcError> {
+        self.call::<_, IgnoredAny>("mount/mount", request)
+            .await
+            .map(drop)
+    }
+
+    /// `mount/unmount`.
+    pub async fn unmount(&self, mount_point: &str) -> Result<(), RcError> {
+        self.call::<_, IgnoredAny>("mount/unmount", &json!({ "mountPoint": mount_point }))
+            .await
+            .map(drop)
+    }
+
+    /// `mount/listmounts`.
+    pub async fn list_mounts(&self) -> Result<Vec<MountInfo>, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(rename = "mountPoints", default)]
+            mount_points: Vec<MountInfo>,
+        }
+        let a: Answer = self
+            .call_with_timeout("mount/listmounts", &json!({}), SHORT)
+            .await?;
+        Ok(a.mount_points)
+    }
+
+    // VFS
+
+    /// `vfs/stats` of one VFS (`fs` is mandatory once several are active).
+    pub async fn vfs_stats(&self, fs: &str) -> Result<VfsStats, RcError> {
+        self.call_with_timeout("vfs/stats", &json!({ "fs": fs }), SHORT)
+            .await
+    }
+
+    /// `vfs/queue`: the upload queue of one VFS.
+    pub async fn vfs_queue(&self, fs: &str) -> Result<Vec<QueueItem>, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            queue: Vec<QueueItem>,
+        }
+        let a: Answer = self
+            .call_with_timeout("vfs/queue", &json!({ "fs": fs }), SHORT)
+            .await?;
+        Ok(a.queue)
+    }
+
+    /// `vfs/queue-set-expiry`: `expiry` seconds from now (negative: upload
+    /// as soon as possible).
+    pub async fn vfs_queue_set_expiry(
+        &self,
+        fs: &str,
+        id: u64,
+        expiry: f64,
+    ) -> Result<(), RcError> {
+        self.call_with_timeout::<_, IgnoredAny>(
+            "vfs/queue-set-expiry",
+            &json!({ "fs": fs, "id": id, "expiry": expiry }),
+            SHORT,
+        )
+        .await
+        .map(drop)
+    }
+
+    /// `vfs/forget` then `vfs/refresh` of the root: the next listings come
+    /// from the provider instead of the directory cache.
+    pub async fn vfs_refresh(&self, fs: &str) -> Result<(), RcError> {
+        self.call::<_, IgnoredAny>("vfs/forget", &json!({ "fs": fs }))
+            .await?;
+        self.call::<_, IgnoredAny>("vfs/refresh", &json!({ "fs": fs }))
+            .await
+            .map(drop)
     }
 }
 

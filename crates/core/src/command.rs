@@ -1,5 +1,6 @@
 //! Requests sent by clients to the daemon, and their replies.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -138,6 +139,10 @@ pub struct AccountAddArgs {
     pub client_secret: Option<String>,
     /// Print the sign-in URL instead of opening a browser.
     pub no_browser: bool,
+    /// Values of the provider's credentials form, by key (e.g. `root` for
+    /// the `local` provider).
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
 }
 
 /// Successful reply to a [`Command`].

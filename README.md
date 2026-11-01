@@ -5,10 +5,10 @@
 
 **Your cloud storage as a regular folder on Linux: a GNOME app for the desktop, a command-line tool for servers.**
 
-> **Status: early development.** Nuage does not work yet. The project
-> skeleton is in place (daemon, command-line tool, desktop app shell); the
-> features below are being built. Sections marked *(planned)* describe the
-> intended behaviour.
+> **Status: early development.** The daemon and the command-line tool can
+> mount a local folder (the test provider), pause and resume uploads and
+> report the sync state; Google Drive and the desktop app are not ready yet.
+> Sections marked *(planned)* describe the intended behaviour.
 
 <!-- TODO: screenshot -->
 
@@ -62,12 +62,24 @@ and libadwaita.
 
 ### Daemon and CLI (any machine)
 
+The daemon runs rclone, which needs FUSE (`fuse3`) to mount. The rclone
+**snap cannot mount**: use the official binary from
+<https://rclone.org/install/> and point `NUAGE_RCLONE` at it if it is not
+first in your `PATH`.
+
 ```sh
 cargo build            # default members: everything except the GTK crates
-cargo test
+cargo test             # end-to-end tests are skipped without rclone and FUSE
+export NUAGE_RCLONE=/path/to/rclone
 cargo run -p nuaged &  # start the daemon (socket in $XDG_RUNTIME_DIR/nuage/)
-cargo run -p nuage -- status --json
+mkdir -p /tmp/files && echo hello > /tmp/files/hello.txt
+cargo run -p nuage -- account add local --param root=/tmp/files
+cargo run -p nuage -- status
 ```
+
+The end-to-end tests (`crates/cli/tests/e2e.rs`) start real `nuaged` and
+`nuage` processes with a temporary home. They skip themselves when rclone or
+FUSE is missing; `NUAGE_E2E_REQUIRED=1` (set in CI) makes that a failure.
 
 ### Desktop app, with system packages
 
@@ -131,6 +143,11 @@ Each permission and its reason will be listed here, in particular
 
 - **`nuage` says the daemon is unreachable (exit code 3)**: start it with
   `systemctl --user start nuaged` (or `nuaged &` during development).
+- **"mounting is not supported when running from snap"**: the rclone snap
+  cannot mount folders. Install rclone from <https://rclone.org/install/>
+  and set `NUAGE_RCLONE` to its path.
+- **The daemon log**: `journalctl --user -u nuaged`, or the daemon's standard
+  error during development (`NUAGE_LOG=debug` for more detail).
 
 ## Command line
 
@@ -144,8 +161,22 @@ Every command accepts `--json`. Exit codes:
 | 3 | daemon unreachable |
 | 4 | authentication required |
 
-Only `nuage status` works so far; the other commands answer
-"not implemented yet" (exit code 1). Run `nuage --help` for the full list.
+Working so far: `status [--watch]`, `account add | list | rename | remove`,
+`mount`, `unmount`, `pause`, `resume`, `refresh`, `config get | set` and
+`daemon status | stop`. File commands (`ls`, `cp`…), exclusions, pins and
+Google sign-in answer "not implemented yet" (exit code 1). Run
+`nuage --help` for the full list.
+
+Settings (`nuage config get`, `nuage config set <key> <value>`):
+
+| Key | Value |
+|---|---|
+| `cache-limit` | cache limit of new accounts, e.g. `20G` |
+| `<account>:cache-limit` | cache limit of one account |
+| `cache-max-age` | how long unused files stay in the cache, e.g. `30d` |
+| `quit-with-pending` | what `nuage daemon stop` does while uploads are pending: `finish-in-background` (default), `ask` or `quit-now` |
+
+Cache settings apply the next time the account is mounted.
 
 ## Architecture
 
@@ -165,7 +196,7 @@ Before sending a change, run:
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+NUAGE_E2E_REQUIRED=1 cargo test
 scripts/check-deps.sh
 cargo deny check
 ```

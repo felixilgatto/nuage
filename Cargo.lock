@@ -1277,6 +1277,7 @@ dependencies = [
  "nuage-ipc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1297,7 +1298,11 @@ dependencies = [
  "nuage-core",
  "nuage-providers",
  "nuage-rclone",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
+ "toml",
  "tracing",
 ]
 
@@ -1346,9 +1351,11 @@ version = "0.1.0"
 dependencies = [
  "nuage-core",
  "reqwest",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -1382,6 +1389,8 @@ dependencies = [
  "nuage-core",
  "nuage-engine",
  "nuage-ipc",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -43,6 +43,12 @@ pub trait Provider: Send + Sync {
     /// How provider-native documents (Google Docs…) are exposed, if any.
     fn native_docs(&self) -> Option<NativeDocPolicy>;
 
+    /// Checks what the user provided before anything is created. The error
+    /// is shown to the user and says what to fix.
+    fn validate(&self, _input: &SetupInput) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Description sent to clients, which do not link this crate.
     fn info(&self) -> ProviderInfo {
         ProviderInfo {

@@ -10,6 +10,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # rclone version bundled with Nuage; the end-to-end tests run against it.
+  RCLONE_VERSION: v1.75.2
 
 jobs:
   check:
@@ -21,7 +23,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev pkg-config jq
+            libgtk-4-dev libadwaita-1-dev pkg-config jq fuse3
+
+      - name: Install rclone
+        run: |
+          cd "$RUNNER_TEMP"
+          zip="rclone-$RCLONE_VERSION-linux-amd64.zip"
+          curl -fsSLO "https://downloads.rclone.org/$RCLONE_VERSION/$zip"
+          curl -fsSL "https://downloads.rclone.org/$RCLONE_VERSION/SHA256SUMS" | grep " $zip\$" | sha256sum -c -
+          unzip -q "$zip"
+          echo "NUAGE_RCLONE=$RUNNER_TEMP/${zip%.zip}/rclone" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,8 +46,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Tests
+      - name: Tests (including end-to-end tests with rclone and FUSE)
         run: cargo test --workspace
+        env:
+          # Fail instead of skipping the end-to-end tests.
+          NUAGE_E2E_REQUIRED: "1"
 
       - name: Dependency rules between crates
         run: scripts/check-deps.sh

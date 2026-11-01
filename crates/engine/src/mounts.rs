@@ -1,6 +1,17 @@
-use std::path::PathBuf;
+//! Mounts: `mount/mount`, `mount/unmount`, mount point validation and
+//! cleanup of mounts left behind by a crashed daemon.
 
-use nuage_core::{Account, AccountId, Error, Result};
+use std::path::{Component, Path, PathBuf};
+
+use nuage_core::{Account, AccountId, Error, Event, Result, VfsOptions};
+use nuage_rclone::{MountOpt, MountRequest, VfsOpt};
+
+use crate::units::rclone_duration;
+use crate::{Inner, Paths, State};
+
+/// rclone's write-back delay for every mount: uploads never start on their
+/// own; `UploadControl` releases them unless the account is paused.
+pub const HOLD_WRITE_BACK: &str = "8760h";
 
 /// Where an account is mounted.
 ///
@@ -29,36 +40,499 @@ impl MountPlan {
     }
 }
 
-/// `mount/mount`, `mount/unmount`, remount at startup, orphan cleanup.
-#[derive(Debug, Default)]
-pub struct MountManager {
-    mounted: Vec<MountPlan>,
+/// The rclone fs string of an account's remote (`"<remote>:"`).
+pub fn remote_fs(account: &Account) -> String {
+    format!("{}:", account.remote_name)
 }
 
-impl MountManager {
-    pub fn mounted(&self) -> &[MountPlan] {
-        &self.mounted
+/// Builds the `mount/mount` request of an account.
+pub fn mount_request(
+    account: &Account,
+    plan: &MountPlan,
+    recommended: &VfsOptions,
+    cache_max_age_secs: Option<u64>,
+) -> Result<MountRequest> {
+    let mount_point = path_str(&plan.rclone_mount_point)?.to_owned();
+    let cache_mode = match recommended.cache_mode {
+        nuage_core::CacheMode::Off => "off",
+        nuage_core::CacheMode::Minimal => "minimal",
+        nuage_core::CacheMode::Writes => "writes",
+        // Pause relies on the disk cache holding the writes.
+        nuage_core::CacheMode::Full => "full",
+    };
+    Ok(MountRequest {
+        fs: remote_fs(account),
+        mount_point,
+        vfs_opt: VfsOpt {
+            cache_mode: cache_mode.to_owned(),
+            cache_max_size: Some(account.cache_limit),
+            cache_max_age: cache_max_age_secs
+                .or(recommended.cache_max_age_secs)
+                .map(rclone_duration),
+            write_back: Some(HOLD_WRITE_BACK.to_owned()),
+            dir_cache_time: recommended.dir_cache_time_secs.map(rclone_duration),
+            poll_interval: recommended.poll_interval_secs.map(rclone_duration),
+        },
+        mount_opt: MountOpt {
+            volume_name: Some(account.display_name.clone()),
+        },
+    })
+}
+
+fn path_str(path: &Path) -> Result<&str> {
+    path.to_str().ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "The folder {} has a name that is not valid UTF-8. Choose another folder.",
+            path.display()
+        ))
+    })
+}
+
+/// Lexically normalises an absolute path (`.` and `..` removed).
+pub fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn overlaps(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Checks a folder chosen for an account and returns its normalised form.
+///
+/// The folder must be absolute, empty or missing, outside Nuage's own
+/// directories, and neither inside nor around another account's folder.
+pub fn validate_mount_point(path: &Path, paths: &Paths, others: &[&Account]) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(Error::InvalidArgument(format!(
+            "The mount folder must be an absolute path, not {}.",
+            path.display()
+        )));
+    }
+    let path = normalize(path);
+    path_str(&path)?;
+    if path.parent().is_none() {
+        return Err(Error::InvalidArgument(
+            "The root folder cannot be used as a mount folder.".to_owned(),
+        ));
+    }
+    if is_document_portal_path(&path) {
+        return Err(Error::InvalidArgument(format!(
+            "{} is a document portal path, not a real folder. Choose a folder in your home directory.",
+            path.display()
+        )));
+    }
+    if paths.in_flatpak && !path.starts_with(&paths.home) {
+        return Err(Error::InvalidArgument(format!(
+            "Nuage cannot reach {} from its sandbox. Allow it with:\n  flatpak override --user --filesystem={} {}\nthen try again.",
+            path.display(),
+            path.display(),
+            nuage_core::APP_ID
+        )));
+    }
+    for dir in paths.private_dirs() {
+        if overlaps(&path, dir) {
+            return Err(Error::InvalidArgument(format!(
+                "{} overlaps Nuage's own data folder {}. Choose another folder.",
+                path.display(),
+                dir.display()
+            )));
+        }
+    }
+    for other in others {
+        if overlaps(&path, &other.mount_point) {
+            return Err(Error::AlreadyExists(format!(
+                "{} overlaps the folder of the account \"{}\" ({}). Choose another folder.",
+                path.display(),
+                other.display_name,
+                other.mount_point.display()
+            )));
+        }
+    }
+    match std::fs::read_dir(&path) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(Error::InvalidArgument(format!(
+                    "{} is not empty. Choose an empty or new folder.",
+                    path.display()
+                )));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => {
+            return Err(Error::InvalidArgument(format!(
+                "{} is a file, not a folder.",
+                path.display()
+            )));
+        }
+        Err(e) => {
+            return Err(Error::Io(format!("cannot read {}: {e}", path.display())));
+        }
+    }
+    Ok(path)
+}
+
+/// `/run/user/<uid>/doc/…`: paths handed out by the document portal.
+fn is_document_portal_path(path: &Path) -> bool {
+    let mut c = path.components().skip(1);
+    matches!(
+        (c.next(), c.next(), c.next(), c.next()),
+        (Some(a), Some(b), Some(_), Some(d))
+            if a.as_os_str() == "run" && b.as_os_str() == "user" && d.as_os_str() == "doc"
+    )
+}
+
+/// FUSE mount points currently in the kernel's mount table, from
+/// `/proc/self/mountinfo`.
+pub fn fuse_mounts() -> Vec<PathBuf> {
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .map(|text| parse_fuse_mounts(&text))
+        .unwrap_or_default()
+}
+
+fn parse_fuse_mounts(mountinfo: &str) -> Vec<PathBuf> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let mount_point = fields.get(4)?;
+            let sep = fields.iter().position(|f| *f == "-")?;
+            let fstype = fields.get(sep + 1)?;
+            fstype
+                .starts_with("fuse")
+                .then(|| PathBuf::from(unescape_mountinfo(mount_point)))
+        })
+        .collect()
+}
+
+/// Decodes the `\NNN` octal escapes of mountinfo (space, tab, `\`, newline).
+fn unescape_mountinfo(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let octal = bytes
+            .get(i + 1..i + 4)
+            .filter(|d| d.iter().all(|b| (b'0'..=b'7').contains(b)))
+            .and_then(|d| u8::from_str_radix(std::str::from_utf8(d).ok()?, 8).ok());
+        if bytes[i] == b'\\'
+            && let Some(v) = octal
+        {
+            out.push(v);
+            i += 4;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Detaches a FUSE mount with `fusermount3 -u -z` (lazy: works even when
+/// the mount is stale or busy).
+pub async fn force_unmount(path: &Path) -> Result<()> {
+    let mut last = String::new();
+    for tool in ["fusermount3", "fusermount"] {
+        match tokio::process::Command::new(tool)
+            .arg("-u")
+            .arg("-z")
+            .arg(path)
+            .output()
+            .await
+        {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => last = String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+            Err(e) => last = format!("cannot run {tool}: {e}"),
+        }
+    }
+    Err(Error::Io(format!(
+        "cannot unmount {}: {last}",
+        path.display()
+    )))
+}
+
+/// Turns an rclone mount error into a message that says what to do.
+fn mount_error(account: &Account, e: &nuage_rclone::RcError) -> String {
+    let raw = match e {
+        nuage_rclone::RcError::Api { message, .. } => message.clone(),
+        other => other.to_string(),
+    };
+    if raw.contains("not empty") {
+        format!(
+            "Cannot mount \"{}\": the folder {} is not empty. Move its content elsewhere, then run `nuage mount \"{}\"`.",
+            account.display_name,
+            account.mount_point.display(),
+            account.display_name
+        )
+    } else if raw.contains("fusermount") || raw.contains("/dev/fuse") {
+        format!(
+            "Cannot mount \"{}\": FUSE is not available ({raw}). Install fuse3 and check that /dev/fuse exists.",
+            account.display_name
+        )
+    } else {
+        format!("Cannot mount \"{}\": {raw}", account.display_name)
+    }
+}
+
+impl Inner {
+    /// `nuage mount`: mounts now and at every daemon start.
+    pub(crate) async fn mount_command(&self, id: &AccountId) -> Result<()> {
+        let mut st = self.state.lock().await;
+        let i = st.resolve(id)?;
+        if !st.config.accounts[i].auto_mount {
+            st.config.accounts[i].auto_mount = true;
+            self.save(&st)?;
+        }
+        self.mount_locked(&mut st, i).await
     }
 
-    pub async fn mount(&self, _account: &AccountId) -> Result<()> {
-        Err(Error::not_implemented("mounting an account"))
+    /// `nuage unmount`: unmounts and stays unmounted across restarts.
+    pub(crate) async fn unmount_command(&self, id: &AccountId) -> Result<()> {
+        let mut st = self.state.lock().await;
+        let i = st.resolve(id)?;
+        if st.config.accounts[i].auto_mount {
+            st.config.accounts[i].auto_mount = false;
+            self.save(&st)?;
+        }
+        let account = st.record(i).account.clone();
+        self.unmount_locked(&mut st, &account).await
     }
 
-    pub async fn unmount(&self, _account: &AccountId) -> Result<()> {
-        Err(Error::not_implemented("unmounting an account"))
+    /// Mounts account `i`; does nothing if it is already mounted.
+    pub(crate) async fn mount_locked(&self, st: &mut State, i: usize) -> Result<()> {
+        let account = st.record(i).account.clone();
+        if st.is_mounted(&account.id) {
+            return Ok(());
+        }
+        let result = self.do_mount(st, &account).await;
+        let runtime = st.runtime(&account.id);
+        match &result {
+            Ok(plan) => {
+                runtime.mounted = Some(plan.clone());
+                runtime.mount_error = None;
+                runtime.quota_at = None;
+                self.emit(Event::MountChanged {
+                    account: account.id.clone(),
+                    mounted: true,
+                });
+                tracing::info!(account = %account.display_name, at = %plan.user_mount_point.display(), "mounted");
+            }
+            Err(e) => runtime.mount_error = Some(e.to_string()),
+        }
+        result.map(drop)
     }
 
-    /// Mounts every account at daemon startup.
-    pub async fn remount_all(&self, _accounts: &[Account]) -> Result<()> {
-        Err(Error::not_implemented("remounting accounts"))
+    async fn do_mount(&self, st: &mut State, account: &Account) -> Result<MountPlan> {
+        let provider = self.registry.get(&account.provider_id).ok_or_else(|| {
+            Error::Unsupported(format!(
+                "The provider \"{}\" of \"{}\" is not available in this build of Nuage.",
+                account.provider_id, account.display_name
+            ))
+        })?;
+        let rc = self.rc().await?;
+        let plan = MountPlan::direct(account);
+        let target = &plan.rclone_mount_point;
+        if fuse_mounts().contains(target) {
+            tracing::info!(path = %target.display(), "detaching a stale mount");
+            force_unmount(target).await?;
+        }
+        std::fs::create_dir_all(target)?;
+        let request = mount_request(
+            account,
+            &plan,
+            &provider.recommended_vfs_opts(),
+            st.config.settings.cache_max_age_secs,
+        )?;
+        rc.mount(&request)
+            .await
+            .map_err(|e| Error::Rclone(mount_error(account, &e)))?;
+
+        let mut caps = provider.static_capabilities();
+        match rc.fsinfo(&request.fs).await {
+            Ok(info) => caps.merge_fsinfo_features(&info.features),
+            Err(e) => {
+                tracing::warn!(account = %account.display_name, error = %e, "operations/fsinfo failed")
+            }
+        }
+        st.runtime(&account.id).capabilities = Some(caps);
+        Ok(plan)
     }
 
-    pub async fn unmount_all(&self) -> Result<()> {
-        Err(Error::not_implemented("unmounting all accounts"))
+    /// Unmounts an account if it is mounted. Writes not uploaded yet stay in
+    /// the cache and are queued again at the next mount.
+    pub(crate) async fn unmount_locked(&self, st: &mut State, account: &Account) -> Result<()> {
+        let Some(plan) = st.runtime(&account.id).mounted.clone() else {
+            return Ok(());
+        };
+        let path = path_str(&plan.rclone_mount_point)?.to_owned();
+        let result = match self.rc().await {
+            Ok(rc) => rc.unmount(&path).await.map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = result {
+            if fuse_mounts().contains(&plan.rclone_mount_point) {
+                tracing::warn!(error = %e, "mount/unmount failed, detaching");
+                force_unmount(&plan.rclone_mount_point).await?;
+            }
+        }
+        let runtime = st.runtime(&account.id);
+        runtime.mounted = None;
+        runtime.disk_cache = None;
+        self.emit(Event::MountChanged {
+            account: account.id.clone(),
+            mounted: false,
+        });
+        tracing::info!(account = %account.display_name, "unmounted");
+        Ok(())
     }
 
-    /// Removes mounts left behind by a crashed daemon.
-    pub async fn cleanup_orphans(&self) -> Result<()> {
-        Err(Error::not_implemented("cleaning up orphan mounts"))
+    /// Detaches mounts left by a crash, then mounts every account marked
+    /// for it. Failures are recorded per account, not returned.
+    pub(crate) async fn remount_all(&self) {
+        let mut st = self.state.lock().await;
+        let kernel = fuse_mounts();
+        let mut stale: Vec<PathBuf> = st
+            .config
+            .accounts
+            .iter()
+            .map(|r| MountPlan::direct(&r.account).rclone_mount_point)
+            .filter(|p| kernel.contains(p))
+            .collect();
+        let hidden = self.paths.hidden_mounts();
+        stale.extend(kernel.iter().filter(|p| p.starts_with(&hidden)).cloned());
+        for path in stale {
+            tracing::info!(path = %path.display(), "cleaning up an orphan mount");
+            if let Err(e) = force_unmount(&path).await {
+                tracing::warn!(error = %e, "orphan cleanup failed");
+            }
+        }
+        for runtime in st.runtime.values_mut() {
+            runtime.mounted = None;
+        }
+        for i in 0..st.config.accounts.len() {
+            if st.record(i).auto_mount
+                && let Err(e) = self.mount_locked(&mut st, i).await
+            {
+                tracing::warn!(error = %e, "mount at startup failed");
+            }
+        }
+    }
+
+    pub(crate) async fn unmount_all(&self) {
+        let mut st = self.state.lock().await;
+        let accounts: Vec<Account> = st
+            .config
+            .accounts
+            .iter()
+            .map(|r| r.account.clone())
+            .collect();
+        for account in accounts {
+            if let Err(e) = self.unmount_locked(&mut st, &account).await {
+                tracing::warn!(account = %account.display_name, error = %e, "unmount failed");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nuage_core::AccountId;
+
+    fn account(name: &str, mount_point: &str) -> Account {
+        Account {
+            id: AccountId::new(name),
+            provider_id: "local".into(),
+            display_name: name.into(),
+            remote_name: format!("nuage-{name}"),
+            mount_point: mount_point.into(),
+            cache_limit: 1 << 30,
+        }
+    }
+
+    #[test]
+    fn mountinfo() {
+        let text = "\
+36 35 98:0 / /mnt1 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
+80 25 0:52 / /home/me/Cloud/Google\\040Drive rw,nosuid,nodev - fuse.rclone gdrive: rw,user_id=1000
+81 25 0:53 / /run/user/1000/doc rw - fuse.portal portal rw
+";
+        assert_eq!(
+            parse_fuse_mounts(text),
+            vec![
+                PathBuf::from("/home/me/Cloud/Google Drive"),
+                PathBuf::from("/run/user/1000/doc"),
+            ]
+        );
+        assert_eq!(unescape_mountinfo("a\\134b"), "a\\b");
+        assert_eq!(unescape_mountinfo("trailing\\04"), "trailing\\04");
+    }
+
+    #[test]
+    fn mount_point_rules() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::under(root.path());
+        let home = &paths.home;
+        let drive = account("Drive", home.join("Cloud/Drive").to_str().unwrap());
+        let others = [&drive];
+
+        let ok = validate_mount_point(&home.join("Cloud/./Work"), &paths, &others).unwrap();
+        assert_eq!(ok, home.join("Cloud/Work"));
+
+        let refused = [
+            PathBuf::from("relative/path"),
+            PathBuf::from("/"),
+            PathBuf::from("/run/user/1000/doc/abcd/Drive"),
+            home.join("Cloud/Drive"),
+            home.join("Cloud/Drive/inner"),
+            home.join("Cloud"),
+            paths.cache_dir.join("x"),
+            paths.data_dir.clone(),
+        ];
+        for path in refused {
+            assert!(
+                validate_mount_point(&path, &paths, &others).is_err(),
+                "{}",
+                path.display()
+            );
+        }
+
+        let full = home.join("full");
+        std::fs::create_dir_all(&full).unwrap();
+        std::fs::write(full.join("file"), "x").unwrap();
+        assert!(validate_mount_point(&full, &paths, &others).is_err());
+        assert!(validate_mount_point(&full.join("file"), &paths, &others).is_err());
+
+        let flatpak = Paths {
+            in_flatpak: true,
+            ..paths.clone()
+        };
+        let err = validate_mount_point(Path::new("/mnt/data/Drive"), &flatpak, &[]).unwrap_err();
+        assert!(err.to_string().contains("flatpak override"), "{err}");
+    }
+
+    #[test]
+    fn request_shape() {
+        let a = account("Drive", "/home/me/Cloud/Drive");
+        let plan = MountPlan::direct(&a);
+        let req = mount_request(&a, &plan, &VfsOptions::default(), Some(3600)).unwrap();
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["fs"], "nuage-Drive:");
+        assert_eq!(json["mountPoint"], "/home/me/Cloud/Drive");
+        assert_eq!(json["vfsOpt"]["CacheMode"], "full");
+        assert_eq!(json["vfsOpt"]["CacheMaxSize"], 1u64 << 30);
+        assert_eq!(json["vfsOpt"]["CacheMaxAge"], "3600s");
+        assert_eq!(json["vfsOpt"]["WriteBack"], HOLD_WRITE_BACK);
+        assert!(json["vfsOpt"].get("PollInterval").is_none());
+        assert_eq!(json["mountOpt"]["VolumeName"], "Drive");
     }
 }

@@ -155,6 +155,16 @@ pub struct AccountAdd {
     /// Print the sign-in URL instead of opening a browser.
     #[arg(long)]
     pub no_browser: bool,
+    /// Provider setting, e.g. `--param root=/srv/files` for the local provider.
+    #[arg(long = "param", value_name = "KEY=VALUE", value_parser = parse_param)]
+    pub params: Vec<(String, String)>,
+}
+
+fn parse_param(s: &str) -> Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((k, v)) if !k.is_empty() => Ok((k.to_owned(), v.to_owned())),
+        _ => Err(format!("expected KEY=VALUE, got \"{s}\"")),
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -280,6 +290,7 @@ mod tests {
             "nuage status --watch",
             "nuage account add gdrive --name Drive --mount-point /tmp/d --token-file t.json --no-browser",
             "nuage account add gdrive --client-id a --client-secret b",
+            "nuage account add local --param root=/srv --param x=",
             "nuage account list",
             "nuage account rename Drive Work",
             "nuage account reconnect Drive",
@@ -316,6 +327,7 @@ mod tests {
         let bad = [
             "nuage account add gdrive --token x --token-file y",
             "nuage account add gdrive --client-id a",
+            "nuage account add local --param =x",
             "nuage exclude add Drive",
             "nuage exclude add Drive path --glob x",
         ];

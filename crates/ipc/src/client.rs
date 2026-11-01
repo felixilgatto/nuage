@@ -24,6 +24,7 @@ impl Client {
     ///
     /// `client_name` appears in the daemon logs (e.g. `"nuage 0.1.0"`).
     pub async fn connect(path: &Path, client_name: &str) -> Result<Self, IpcError> {
+        crate::server::check_path_len(path)?;
         let stream = UnixStream::connect(path)
             .await
             .map_err(|source| IpcError::Unreachable {

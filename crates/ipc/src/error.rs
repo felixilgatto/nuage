@@ -17,6 +17,9 @@ pub enum IpcError {
     /// Another daemon already listens on the socket.
     #[error("Nuage daemon is already running (socket {0})")]
     AlreadyRunning(PathBuf),
+    /// Unix socket paths are limited to 107 bytes by the kernel.
+    #[error("The socket path {0} is too long (at most 107 bytes); choose a shorter NUAGE_SOCKET")]
+    PathTooLong(PathBuf),
     /// `$XDG_RUNTIME_DIR` is not set, so the socket location is unknown.
     #[error(
         "XDG_RUNTIME_DIR is not set; cannot locate the daemon socket (set NUAGE_SOCKET to override)"

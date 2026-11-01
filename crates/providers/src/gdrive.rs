@@ -48,6 +48,8 @@ impl Provider for GoogleDrive {
         }
         if let Some(token) = &input.token {
             params.push(("token".to_owned(), token.clone()));
+            // v1 mounts "My Drive" only: do not ask about shared drives.
+            params.push(("config_change_team_drive".to_owned(), "false".to_owned()));
         }
         params
     }

@@ -1,13 +1,17 @@
 //! Typed client for the rclone remote control API (`rclone rcd`) and
 //! supervision of the `rclone rcd` process.
 //!
-//! Only `core/version` is implemented so far; the other endpoints listed in
-//! `docs/ARCHITECTURE.md` are added with the engine (milestone 3). Field
-//! names change between rclone versions: they must be checked against the
-//! bundled rclone and covered by integration tests.
+//! Only the endpoints used by Nuage are typed (see `docs/ARCHITECTURE.md`).
+//! Field names change between rclone versions: they are checked against the
+//! bundled rclone by the integration tests of `nuage-engine`.
 
 mod client;
 mod supervisor;
+mod types;
 
-pub use client::{CoreVersion, RcClient, RcError};
+pub use client::{RcClient, RcError};
 pub use supervisor::{RcdConfig, RcdSupervisor};
+pub use types::{
+    About, ConfigOutcome, CoreVersion, DiskCache, FsInfo, MountInfo, MountOpt, MountRequest,
+    QueueItem, VfsOpt, VfsStats,
+};

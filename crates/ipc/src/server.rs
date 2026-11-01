@@ -33,6 +33,7 @@ impl Server {
     /// Fails with [`IpcError::AlreadyRunning`] if a daemon already answers
     /// on that socket. A stale socket left by a crashed daemon is replaced.
     pub async fn bind(path: &Path) -> Result<Self, IpcError> {
+        check_path_len(path)?;
         if let Some(dir) = path.parent() {
             std::fs::DirBuilder::new()
                 .recursive(true)
@@ -44,7 +45,10 @@ impl Server {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(_) => {
                 tracing::info!(path = %path.display(), "removing stale socket");
-                std::fs::remove_file(path)?;
+                match std::fs::remove_file(path) {
+                    Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => {}
+                }
             }
         }
         let listener = UnixListener::bind(path)?;
@@ -80,6 +84,15 @@ impl Server {
             });
         }
     }
+}
+
+/// `sun_path` holds 108 bytes including the terminating NUL.
+pub(crate) fn check_path_len(path: &Path) -> Result<(), IpcError> {
+    use std::os::unix::ffi::OsStrExt;
+    if path.as_os_str().as_bytes().len() > 107 {
+        return Err(IpcError::PathTooLong(path.to_owned()));
+    }
+    Ok(())
 }
 
 impl Drop for Server {

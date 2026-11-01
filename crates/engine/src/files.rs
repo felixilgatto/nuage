@@ -1,9 +1,11 @@
 use std::path::Path;
 
-use nuage_core::{AccountId, Entry, Error, RemotePath, Result};
+use nuage_core::{Entry, Error, RemotePath, Result};
 
 /// File operations through the rc API, independent of the mount: they work
 /// even when the account is unmounted.
+///
+/// **Stub**: implemented in milestone 9.
 #[derive(Debug, Default)]
 pub struct FileService {}
 
@@ -38,10 +40,5 @@ impl FileService {
 
     pub async fn public_link(&self, _path: &RemotePath) -> Result<String> {
         Err(Error::not_implemented("creating a share link"))
-    }
-
-    /// `vfs/refresh` for one account or all of them.
-    pub async fn refresh(&self, _account: Option<&AccountId>) -> Result<()> {
-        Err(Error::not_implemented("refreshing"))
     }
 }

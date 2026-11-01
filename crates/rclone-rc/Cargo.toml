@@ -12,15 +12,17 @@ publish.workspace = true
 [dependencies]
 nuage-core.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
