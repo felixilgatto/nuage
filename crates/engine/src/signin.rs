@@ -144,7 +144,10 @@ impl Inner {
         answers: Vec<(String, String)>,
     ) -> Result<SignIn> {
         // rclone takes the page from a file (values are single lines).
-        let page = self.paths.rcd_pid_file().with_file_name("sign-in-page.html");
+        let page = self
+            .paths
+            .rcd_pid_file()
+            .with_file_name("sign-in-page.html");
         std::fs::write(&page, SIGN_IN_PAGE)?;
         let page = page.to_string_lossy().into_owned();
         let started = async {
