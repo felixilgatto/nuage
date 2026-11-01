@@ -38,6 +38,7 @@ the abstraction is missing something; extend `nuage-core` (e.g.
 | `sub_drives()` *(optional)* | other drives its accounts reach (rclone listing command, selecting parameter), each added as an account of its own |
 | `client_id_suffix()` *(optional)* | end of a valid client ID, to check what the user pastes |
 | `validate(input)` *(optional)* | checks the input before anything is created; the error says what to fix |
+| `choice_rank(question, choice)` *(optional)* | order in which to try the choices rclone offers for a question `config_params()` does not answer (e.g. the OneDrive drive); lower first |
 | `info()` *(provided)* | the description sent to clients; do not override |
 
 ## Rules

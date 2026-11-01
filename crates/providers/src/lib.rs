@@ -64,6 +64,14 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Order in which to try the choices rclone offers for a question that
+    /// [`config_params`](Self::config_params) does not answer (e.g. which
+    /// OneDrive drive): lower first, then rclone's order. `choice` is
+    /// rclone's description of it.
+    fn choice_rank(&self, _question: &str, _choice: &str) -> u8 {
+        0
+    }
+
     /// Checks what the user provided before anything is created. The error
     /// is shown to the user and says what to fix.
     fn validate(&self, _input: &SetupInput) -> Result<(), String> {

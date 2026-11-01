@@ -4,6 +4,10 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- OneDrive: the drive named "OneDrive" is tried first; adding an account on a
+  server with `--token-file` answers the same questions as a sign-in.
+- Removing an account no longer fills the log with errors about its cache.
+- The OneDrive Personal Vault, which cannot be opened, is documented.
 - After an update installed while Nuage runs, folders still mount, and Nuage
   offers to restart into the new version.
 - Leaving the folder screen without starting the sync no longer leaves a

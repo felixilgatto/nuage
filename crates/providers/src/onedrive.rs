@@ -51,6 +51,17 @@ impl Provider for OneDrive {
         params
     }
 
+    fn choice_rank(&self, question: &str, choice: &str) -> u8 {
+        // rclone lists the account's drives as "<name> (<type>)". Personal
+        // accounts can list stale ones Microsoft refuses to open; the user's
+        // own drive is named "OneDrive".
+        if question == "config_driveid" && choice.starts_with("OneDrive (") {
+            0
+        } else {
+            1
+        }
+    }
+
     fn static_capabilities(&self) -> Capabilities {
         Capabilities {
             quota: true,
@@ -108,6 +119,13 @@ mod tests {
         };
         let params = OneDrive.config_params(&input);
         assert!(params.contains(&("client_id".into(), "app".into())));
+    }
+
+    #[test]
+    fn drive_choice() {
+        let rank = |c| OneDrive.choice_rank("config_driveid", c);
+        assert!(rank("OneDrive (personal)") < rank("ODCMetadataArchive (personal)"));
+        assert!(rank("OneDrive (business)") < rank("AEEE102E-CFF8 (personal)"));
     }
 
     #[test]

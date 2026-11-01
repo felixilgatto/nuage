@@ -16,5 +16,8 @@
 - **Google asks you to sign in every week**: your OAuth app is still in
   *Testing*; publish it (step 4 of [GOOGLE_OAUTH.md](GOOGLE_OAUTH.md)), then
   run `nuage account reconnect "Google Drive"`.
+- **The OneDrive "Personal Vault" folder cannot be opened**: Microsoft does
+  not let other applications open it. Use the OneDrive website or app for
+  the files it holds.
 - **The daemon log**: `journalctl --user -u nuaged`, or the daemon's standard
   error during development (`NUAGE_LOG=debug` for more detail).

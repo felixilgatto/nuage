@@ -19,7 +19,7 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use nuage_core::{Account, AccountId, Error, Event, Result, SignIn};
-use nuage_rclone::{ConfigStep, RcClient};
+use nuage_rclone::{ConfigOutcome, ConfigStep, RcClient};
 
 use crate::Inner;
 
@@ -59,6 +59,8 @@ pub(crate) struct PendingSignIn {
     /// parameters of the provider, e.g. `config_change_team_drive=false`):
     /// rclone does not keep them from the first call.
     answers: Vec<(String, String)>,
+    /// The account's provider, which ranks rclone's choices.
+    provider: String,
     job: u64,
     started: Instant,
 }
@@ -153,6 +155,7 @@ impl Inner {
         state: &str,
         kind: SignInKind,
         answers: Vec<(String, String)>,
+        provider: &str,
     ) -> Result<SignIn> {
         // rclone takes the page from a file (values are single lines).
         let page = self
@@ -211,11 +214,94 @@ impl Inner {
             kind,
             remote_name: remote_name.to_owned(),
             answers,
+            provider: provider.to_owned(),
             job,
             started: Instant::now(),
         });
         tracing::info!(remote = remote_name, "sign-in started");
         Ok(SignIn { session, url })
+    }
+
+    /// Answers the questions rclone asks once it has a token (after the
+    /// sign-in, or when one was given): ours (`answers`, from the provider's
+    /// `config_*` parameters), else rclone's proposals in the provider's
+    /// order. When rclone refuses a proposal (e.g. a OneDrive drive whose
+    /// root cannot be read), it asks again from an earlier question, and the
+    /// next one is tried.
+    pub(crate) async fn answer_questions(
+        &self,
+        rc: &RcClient,
+        remote_name: &str,
+        mut outcome: ConfigOutcome,
+        answers: &[(String, String)],
+        provider: &str,
+    ) -> Result<()> {
+        let provider = self.registry.get(provider);
+        let mut tried: Vec<String> = Vec::new();
+        let mut proposed = false;
+        let mut refused: Option<String> = None;
+        for _ in 0..20 {
+            if !outcome.error.is_empty() {
+                if proposed && !outcome.is_complete() {
+                    tracing::warn!(error = %outcome.error, "rclone refused its proposal, trying the next one");
+                    refused = Some(outcome.error.clone());
+                } else {
+                    return Err(sign_in_error(&outcome.error));
+                }
+            }
+            if outcome.is_complete() {
+                return Ok(());
+            }
+            proposed = false;
+            let question = outcome.pending_question().unwrap_or_default().to_owned();
+            // No question: rclone only moves on.
+            let answer = match answers.iter().find(|(k, _)| *k == question) {
+                Some((_, answer)) => answer.clone(),
+                None if question.is_empty() => String::new(),
+                None => {
+                    let next = outcome
+                        .choices()
+                        .into_iter()
+                        .filter(|(value, _)| !tried.contains(value))
+                        .min_by_key(|(_, help)| {
+                            provider.map_or(0, |p| p.choice_rank(&question, help))
+                        });
+                    let Some((answer, help)) = next else {
+                        // Every proposal was refused: say why.
+                        return Err(match refused.take() {
+                            Some(e) => sign_in_error(&e),
+                            None => Error::Rclone(format!(
+                                "rclone still asks \"{question}\" after the sign-in."
+                            )),
+                        });
+                    };
+                    tracing::info!(%question, %answer, %help, "taking rclone's proposal");
+                    tried.push(answer.clone());
+                    proposed = true;
+                    answer
+                }
+            };
+            tracing::debug!(%question, "answering rclone");
+            match rc
+                .config_continue(
+                    remote_name,
+                    &outcome.state,
+                    &answer,
+                    false,
+                    serde_json::json!({}),
+                )
+                .await
+            {
+                Ok(ConfigStep::Done(next)) => outcome = next,
+                Ok(ConfigStep::Job(_)) => {
+                    return Err(Error::Internal("unexpected rc job".to_owned()));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(Error::Rclone(
+            "rclone kept asking questions after the sign-in.".to_owned(),
+        ))
     }
 
     /// Deletes what a failed or cancelled sign-in created.
@@ -269,82 +355,16 @@ impl Inner {
         let failure = if !job.error.is_empty() {
             Some(sign_in_error(&job.error))
         } else {
-            let mut outcome = job.output.clone().unwrap_or_default();
-            let mut failure = None;
-            // rclone's proposals already answered: when rclone refuses one
-            // (e.g. a OneDrive drive whose root cannot be read), it asks
-            // again from an earlier question, and the next one is tried.
-            let mut tried: Vec<String> = Vec::new();
-            let mut proposed = false;
-            let mut refused: Option<String> = None;
-            // Answer the questions rclone asks after the sign-in.
-            for _ in 0..20 {
-                if !outcome.error.is_empty() {
-                    if proposed && !outcome.is_complete() {
-                        tracing::warn!(error = %outcome.error, "rclone refused its proposal, trying the next one");
-                        refused = Some(outcome.error.clone());
-                    } else {
-                        failure = Some(sign_in_error(&outcome.error));
-                        break;
-                    }
-                }
-                if outcome.is_complete() {
-                    break;
-                }
-                proposed = false;
-                let question = outcome.pending_question().unwrap_or_default().to_owned();
-                // Our answer, or else what rclone proposes (e.g. which
-                // OneDrive drive). No question: rclone only moves on.
-                let answer = match pending.answers.iter().find(|(k, _)| *k == question) {
-                    Some((_, answer)) => answer.clone(),
-                    None if question.is_empty() => String::new(),
-                    None => match outcome.proposed_answer(&tried) {
-                        Some((answer, help)) => {
-                            tracing::info!(%question, %answer, %help, "taking rclone's proposal");
-                            tried.push(answer.clone());
-                            proposed = true;
-                            answer
-                        }
-                        None => {
-                            // Every proposal was refused: say why.
-                            failure = Some(match refused.take() {
-                                Some(e) => sign_in_error(&e),
-                                None => Error::Rclone(format!(
-                                    "rclone still asks \"{question}\" after the sign-in."
-                                )),
-                            });
-                            break;
-                        }
-                    },
-                };
-                tracing::debug!(%question, "answering rclone");
-                match rc
-                    .config_continue(
-                        &pending.remote_name,
-                        &outcome.state,
-                        &answer,
-                        false,
-                        serde_json::json!({}),
-                    )
-                    .await
-                {
-                    Ok(ConfigStep::Done(next)) => outcome = next,
-                    Ok(ConfigStep::Job(_)) => {
-                        failure = Some(Error::Internal("unexpected rc job".to_owned()));
-                        break;
-                    }
-                    Err(e) => {
-                        failure = Some(e.into());
-                        break;
-                    }
-                }
-            }
-            if failure.is_none() && !outcome.is_complete() {
-                failure = Some(Error::Rclone(
-                    "rclone kept asking questions after the sign-in.".to_owned(),
-                ));
-            }
-            failure
+            let outcome = job.output.clone().unwrap_or_default();
+            self.answer_questions(
+                &rc,
+                &pending.remote_name,
+                outcome,
+                &pending.answers,
+                &pending.provider,
+            )
+            .await
+            .err()
         };
         if let Some(e) = failure {
             tracing::warn!(remote = %pending.remote_name, error = %e, "sign-in failed");

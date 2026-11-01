@@ -29,6 +29,8 @@ Nuage hides the actions a provider does not support.
   SharePoint and OneDrive for work or school come later.
 - Office documents are regular files: they open in your usual applications.
 - Nothing to set up: sign in in your browser.
+- The **Personal Vault** ("Coffre-fort" in French) shows as a folder that
+  cannot be opened: Microsoft only opens it in its own apps.
 
 ## Local folder
 

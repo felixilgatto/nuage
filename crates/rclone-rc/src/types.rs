@@ -57,24 +57,36 @@ impl ConfigOutcome {
         self.option.as_ref()?.get("Name")?.as_str()
     }
 
-    /// What rclone proposes for the pending question, leaving out the
-    /// answers already `tried`: its default, or else its first remaining
-    /// choice (e.g. which OneDrive drive), with that choice's description.
-    pub fn proposed_answer(&self, tried: &[String]) -> Option<(String, String)> {
-        let option = self.option.as_ref()?;
-        let fresh = |v: &&str| !v.is_empty() && !tried.iter().any(|t| t == v);
-        let default = option
-            .get("Default")
-            .and_then(|v| v.as_str())
-            .filter(fresh)
-            .map(|v| (v.to_owned(), String::new()));
-        default.or_else(|| {
-            option.get("Examples")?.as_array()?.iter().find_map(|e| {
-                let value = e.get("Value")?.as_str().filter(fresh)?;
+    /// What rclone proposes for the pending question, as (value,
+    /// description): its default, then its choices (e.g. which OneDrive
+    /// drive).
+    pub fn choices(&self) -> Vec<(String, String)> {
+        let Some(option) = self.option.as_ref() else {
+            return Vec::new();
+        };
+        let mut choices: Vec<(String, String)> = Vec::new();
+        if let Some(default) = option.get("Default").and_then(|v| v.as_str()) {
+            choices.push((default.to_owned(), String::new()));
+        }
+        for e in option
+            .get("Examples")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(value) = e.get("Value").and_then(|v| v.as_str()) {
                 let help = e.get("Help").and_then(|h| h.as_str()).unwrap_or_default();
-                Some((value.to_owned(), help.to_owned()))
-            })
-        })
+                choices.push((value.to_owned(), help.to_owned()));
+            }
+        }
+        choices.retain(|(v, _)| !v.is_empty());
+        let mut seen = Vec::new();
+        choices.retain(|(v, _)| {
+            let new = !seen.contains(v);
+            seen.push(v.clone());
+            new
+        });
+        choices
     }
 }
 
@@ -299,25 +311,29 @@ mod tests {
     }
 
     #[test]
-    fn proposed_answer() {
+    fn choices() {
         // rclone's OneDrive drive choice (fs.ConfigChoose): no default.
         let choose = outcome(serde_json::json!({
             "Name": "config_driveid",
             "Default": "",
-            "Examples": [{"Value": "b!abc", "Help": "OneDrive (personal)"}, {"Value": "b!def"}],
+            "Examples": [{"Value": "b!abc", "Help": "Stale (personal)"}, {"Value": "6B44", "Help": "OneDrive (personal)"}],
         }));
-        let value = |o: &ConfigOutcome, tried: &[String]| o.proposed_answer(tried).map(|a| a.0);
-        assert_eq!(value(&choose, &[]).as_deref(), Some("b!abc"));
         assert_eq!(
-            choose.proposed_answer(&[]).map(|a| a.1).as_deref(),
-            Some("OneDrive (personal)")
+            choose.choices(),
+            vec![
+                ("b!abc".to_owned(), "Stale (personal)".to_owned()),
+                ("6B44".to_owned(), "OneDrive (personal)".to_owned())
+            ]
         );
-        // The first drive was refused: the next one.
-        assert_eq!(value(&choose, &["b!abc".into()]).as_deref(), Some("b!def"));
-        assert_eq!(value(&choose, &["b!abc".into(), "b!def".into()]), None);
-        let default = outcome(serde_json::json!({"Name": "q", "Default": "true"}));
-        assert_eq!(value(&default, &[]).as_deref(), Some("true"));
-        let none = outcome(serde_json::json!({"Name": "q", "Default": ""}));
-        assert_eq!(value(&none, &[]), None);
+        let default = outcome(serde_json::json!({
+            "Name": "q", "Default": "true", "Examples": [{"Value": "true"}, {"Value": "false"}],
+        }));
+        let values: Vec<_> = default.choices().into_iter().map(|c| c.0).collect();
+        assert_eq!(values, ["true", "false"]);
+        assert!(
+            outcome(serde_json::json!({"Name": "q", "Default": ""}))
+                .choices()
+                .is_empty()
+        );
     }
 }

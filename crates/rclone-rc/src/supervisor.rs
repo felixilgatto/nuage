@@ -226,13 +226,43 @@ impl RcdSupervisor {
     }
 }
 
+/// Remotes whose cache was deleted while rclone still used it.
+static REMOVED_REMOTES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// `remote` was deleted with its cache. rclone keeps its VFS after the
+/// unmount: files other programs still had open are closed later, and
+/// rclone then fails to write their state into the deleted cache. Those
+/// expected errors go to the debug log.
+pub fn cache_deleted(remote: &str) {
+    if let Ok(mut removed) = REMOVED_REMOTES.lock() {
+        removed.push(remote.to_owned());
+    }
+}
+
+/// Whether `line` is about the cache of a removed remote.
+fn about_deleted_cache(line: &str) -> bool {
+    REMOVED_REMOTES.lock().is_ok_and(|removed| {
+        removed.iter().any(|r| {
+            line.contains(&format!("/vfsMeta/{r}/")) || line.contains(&format!("/vfs/{r}/"))
+        })
+    })
+}
+
+fn log_line(line: &str) {
+    if about_deleted_cache(line) {
+        tracing::debug!(target: "rclone", "{line}");
+    } else {
+        tracing::info!(target: "rclone", "{line}");
+    }
+}
+
 /// Sends rclone's output to the daemon log.
 fn forward_output(child: &mut Child) {
     if let Some(out) = child.stdout.take() {
         tokio::spawn(async move {
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::info!(target: "rclone", "{line}");
+                log_line(&line);
             }
         });
     }
@@ -240,7 +270,7 @@ fn forward_output(child: &mut Child) {
         tokio::spawn(async move {
             let mut lines = BufReader::new(err).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::info!(target: "rclone", "{line}");
+                log_line(&line);
             }
         });
     }
@@ -297,6 +327,18 @@ fn random_hex(bytes: usize) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn deleted_cache_lines() {
+        let line = "ERROR : a.txt: vfs cache: item close failed: open /c/rclone/vfsMeta/nuage-dead/a.txt: no such file";
+        assert!(!about_deleted_cache(line));
+        cache_deleted("nuage-dead");
+        assert!(about_deleted_cache(line));
+        assert!(!about_deleted_cache(
+            "open /c/rclone/vfsMeta/nuage-alive/a.txt"
+        ));
+    }
+
     use super::*;
 
     #[test]

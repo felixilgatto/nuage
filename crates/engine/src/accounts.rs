@@ -274,6 +274,19 @@ impl Inner {
         let failure = match &outcome {
             Ok(o) if !o.error.is_empty() => Some(o.error.clone()),
             Ok(o) if sign_in && o.pending_question() == Some(BROWSER_QUESTION) => None,
+            // A token was given: rclone asks what it asks after a sign-in
+            // (e.g. which OneDrive drive).
+            Ok(o) if !sign_in && !o.is_complete() => self
+                .answer_questions(
+                    &rc,
+                    &remote_name,
+                    o.clone(),
+                    &config_answers(&parameters),
+                    provider.id(),
+                )
+                .await
+                .err()
+                .map(|e| e.to_string()),
             Ok(o) if !o.is_complete() => Some(format!(
                 "rclone still asks \"{}\"",
                 o.pending_question().unwrap_or(&o.state)
@@ -311,6 +324,7 @@ impl Inner {
                     &state,
                     SignInKind::Add { account, mount },
                     answers,
+                    provider.id(),
                 )
                 .await?;
             return Ok(Reply::SignIn(sign_in));
@@ -520,6 +534,7 @@ impl Inner {
                 &outcome.state,
                 SignInKind::Reconnect(account.id.clone()),
                 config_answers(&parameters),
+                &account.provider_id,
             )
             .await?;
         Ok(Reply::SignIn(sign_in))
@@ -602,6 +617,7 @@ impl Inner {
         self.save(&st)?;
         drop(st);
 
+        nuage_rclone::cache_deleted(&account.remote_name);
         for dir in cache_dirs {
             match std::fs::remove_dir_all(&dir) {
                 Ok(()) => {}

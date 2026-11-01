@@ -10,7 +10,7 @@ mod supervisor;
 mod types;
 
 pub use client::{RcClient, RcError};
-pub use supervisor::{RcdConfig, RcdSupervisor};
+pub use supervisor::{RcdConfig, RcdSupervisor, cache_deleted};
 pub use types::{
     About, ConfigJob, ConfigOutcome, ConfigStep, CoreVersion, DiskCache, Filter, FsInfo, JobStatus,
     ListItem, MountInfo, MountOpt, MountRequest, OAuthStatus, QueueItem, VfsOpt, VfsStats,
