@@ -64,6 +64,18 @@ pub enum Command {
         account: Option<AccountId>,
         mount_point: PathBuf,
     },
+    /// The user's OAuth client of a provider (shared by its accounts).
+    /// Replies [`Reply::OAuthClient`].
+    OAuthClientGet {
+        provider: String,
+    },
+    /// Replaces the OAuth client of every account of a provider. Their
+    /// tokens belong to the old client: each account must be reconnected.
+    OAuthClientSet {
+        provider: String,
+        client_id: String,
+        client_secret: String,
+    },
     AccountRemove {
         account: AccountId,
         /// Remove even if uploads are pending.
@@ -201,6 +213,16 @@ pub enum Reply {
     Exclusions(Vec<Exclusion>),
     Config(Vec<ConfigEntry>),
     Pins(Vec<Pin>),
+    OAuthClient(OAuthClientInfo),
+}
+
+/// Answer of [`Command::OAuthClientGet`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuthClientInfo {
+    /// `None` when no account of the provider exists (or has a client).
+    pub client_id: Option<String>,
+    /// Accounts using it.
+    pub accounts: Vec<AccountId>,
 }
 
 /// Global state, as shown by the tray icon and `nuage status`.

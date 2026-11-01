@@ -5,7 +5,7 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 9. The daemon supervises rclone, signs in to Google
+> Status: milestone 10. The daemon supervises rclone, signs in to Google
 > Drive, mounts each account in two layers (`nuage-fs` over a hidden rclone
 > mount), applies exclusions, pauses uploads, reports the status and runs
 > file operations; the CLI and the desktop application (setup, main window,
@@ -314,7 +314,7 @@ then `PATH`; log in the user data folder) and never stops it on close.
   window: `AdwNavigationSplitView` with the accounts (quota bars) and the
   folder; breadcrumb, filter, new folder, upload, list (`GtkColumnView`,
   sortable) or grid (`GtkGridView`) view, remembered in
-  `$XDG_CONFIG_HOME/nuage/browser.ini`. Context menus show only what the
+  `$XDG_CONFIG_HOME/nuage/gtk.ini`. Context menus show only what the
   account can do (`Capabilities`): open, show in Files, download to, copy
   link, cut/copy/paste (also across accounts), rename, exclude/include,
   move to trash or delete (confirmed without a trash), properties. Files
@@ -327,8 +327,29 @@ then `PATH`; log in the user data folder) and never stops it on close.
   Pause/Resume Uploads, Add Account, Quit. Without a StatusNotifierWatcher
   (GNOME without the AppIndicator extension), the window is shown instead
   and closing it quits the application (the daemon keeps running).
-- Start at login: Background portal (`nuage-gtk --background`), asked at the
-  last setup screen of the first account.
+- Start at login (`nuage-gtk --background`), asked at the last setup screen
+  of the first account and switched in the preferences: in the Flatpak, the
+  Background portal; outside of it (the portal refuses unsandboxed
+  applications), an entry in `~/.config/autostart/`.
+- Preferences (`ui/preferences.rs`, `AdwPreferencesDialog`, from the main
+  menu, Ctrl+, or the tray): start at login, "quit with pending uploads",
+  the providers' OAuth clients (`OAuthClientGet` / `OAuthClientSet`: a new
+  client signs its accounts out, then they are reconnected one by one);
+  per account: name, folder, sign in again, cache limit and age, the
+  default patterns and the user's exclusions, removal (with the daemon's
+  `busy` answer confirmed before `force`).
+- Reconnecting (`ui/reconnect.rs`): `AccountReconnect` opens the sign-in
+  in the browser, a dialog waits for `SignInWait` (Cancel, Copy link).
+- Notifications (`gio::Notification`, the portal in the Flatpak) for
+  `AuthRequired` (button "Sign In"), `UploadFailed` and `CacheFull`
+  (button "Preferences"). The engine emits `AuthRequired` when the provider
+  refuses the token (`operations/about` with `invalid_grant`…, checked with
+  the quota); the account then shows an error and file commands answer
+  `auth_required` (exit code 4). `UploadFailed` follows the count of
+  errored files of `vfs/stats`.
+- Cache settings (`<account>:cache-limit`, `<account>:cache-max-age`, the
+  global `cache-max-age`) apply at once to mounted accounts by remounting
+  the hidden rclone mount; the user's folder stays.
 - Quit: `DaemonStop` with the "quit with pending uploads" setting; with
   "ask", a dialog offers Wait / Quit Now.
 - Targets GTK 4.14 and libadwaita 1.5 (Ubuntu 24.04, CI); the GNOME 51

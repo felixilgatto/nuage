@@ -312,9 +312,7 @@ async fn run(cli: &Cli) -> Result<(), Failure> {
                     println!("{} = {}", e.key, e.value);
                 }
                 if is_set && entries.iter().any(|e| e.key.contains("cache")) {
-                    println!(
-                        "Mounted accounts use the new value once remounted (nuage unmount, then nuage mount)."
-                    );
+                    println!("Mounted accounts use it now.");
                 }
             }
             Ok(())

@@ -177,8 +177,16 @@ impl Backend {
         })
     }
 
-    /// Asks the Background portal to start the application at login.
+    /// Starts the application at login, or stops doing so. Returns whether
+    /// it now starts at login.
+    ///
+    /// In the Flatpak, asks the Background portal. Outside of it, the portal
+    /// refuses (it only knows sandboxed applications): an XDG autostart
+    /// entry is written instead.
     pub async fn request_autostart(&self, enable: bool) -> Result<bool, String> {
+        if !in_flatpak() {
+            return set_autostart_entry(enable).map(|()| enable);
+        }
         self.run(async move {
             let request = ashpd::desktop::background::Background::request()
                 .reason("Keep your cloud folders mounted and synchronised.")
@@ -193,6 +201,46 @@ impl Backend {
         })
         .await
     }
+}
+
+fn in_flatpak() -> bool {
+    std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists()
+}
+
+/// `~/.config/autostart/<app id>.desktop`, running this executable with
+/// `--background`.
+fn set_autostart_entry(enable: bool) -> Result<(), String> {
+    let path = gtk::glib::user_config_dir()
+        .join("autostart")
+        .join(format!("{}.desktop", nuage_core::APP_ID));
+    if !enable {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("Cannot remove {}: {e}", path.display()))
+            }
+            _ => Ok(()),
+        };
+    }
+    let exe = std::env::current_exe().map_err(message)?;
+    // Desktop entry quoting: spaces and specials need double quotes.
+    let exec = format!(
+        "\"{}\" --background",
+        exe.display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    );
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=Nuage\nComment=Keep your cloud folders mounted and synced\nExec={exec}\nIcon={}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
+        nuage_core::APP_ID
+    );
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+    }
+    std::fs::write(&path, entry).map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
 
 /// Where the daemon started by the application writes its log.

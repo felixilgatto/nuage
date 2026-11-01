@@ -20,14 +20,41 @@ struct Snapshot {
     quota_due: bool,
 }
 
+/// Whether an rclone error says that the provider refused the sign-in
+/// (expired or revoked token, deleted OAuth client).
+pub(crate) fn is_auth_error(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    [
+        "invalid_grant",
+        "invalid_client",
+        "unauthorized_client",
+        "token expired",
+        "expired or revoked",
+        "cannot fetch token",
+        "couldn't fetch token",
+        "failed to refresh token",
+    ]
+    .iter()
+    .any(|s| m.contains(s))
+}
+
+/// What the user reads when an account must be reconnected.
+pub(crate) fn auth_message(account: &Account) -> String {
+    format!(
+        "{} needs you to sign in again (the access expired or was revoked). Reconnect it: nuage account reconnect \"{}\"",
+        account.display_name, account.display_name
+    )
+}
+
 /// State of one account from what the engine knows.
 fn account_state(
     paused: bool,
     mounted: bool,
-    mount_error: Option<&str>,
+    errors: (Option<&str>, Option<&str>),
     stats: Option<&Result<DiskCache, String>>,
 ) -> SyncState {
-    if let Some(message) = mount_error {
+    let (mount_error, auth_error) = errors;
+    if let Some(message) = auth_error.or(mount_error) {
         return SyncState::Error {
             message: message.to_owned(),
             failed_files: 0,
@@ -113,6 +140,8 @@ impl Inner {
             let fs = remote_fs(&s.account);
             let mut stats = None;
             let mut quota = None;
+            // `Some`: the sign-in was checked (and failed with this error).
+            let mut auth = None;
             if s.mounted
                 && let Some(rc) = &rc
             {
@@ -130,18 +159,23 @@ impl Inner {
                                 used: a.used,
                                 free: a.free,
                                 trashed: a.trashed,
-                            })
+                            });
+                            auth = Some(None);
+                        }
+                        Err(e) if is_auth_error(&e.to_string()) => {
+                            tracing::warn!(%fs, error = %e, "the provider refused the sign-in");
+                            auth = Some(Some(auth_message(&s.account)));
                         }
                         Err(e) => tracing::debug!(%fs, error = %e, "operations/about failed"),
                     }
                 }
             }
-            polled.push((stats, quota));
+            polled.push((stats, quota, auth));
         }
 
         let mut st = self.state.lock().await;
         let mut accounts = Vec::with_capacity(snapshots.len());
-        for (s, (stats, quota)) in snapshots.iter().zip(polled) {
+        for (s, (stats, quota, auth)) in snapshots.iter().zip(polled) {
             // The account may have been removed while polling.
             if !st
                 .config
@@ -156,13 +190,32 @@ impl Inner {
                 runtime.quota = Some(q);
                 runtime.quota_at = Some(Instant::now());
             }
+            if let Some(auth) = auth {
+                if auth.is_some() && runtime.auth_error.is_none() {
+                    self.emit(Event::AuthRequired {
+                        account: s.account.id.clone(),
+                    });
+                }
+                runtime.auth_error = auth;
+            }
             if let Some(Ok(cache)) = &stats {
+                let before = runtime.disk_cache.as_ref().map_or(0, |c| c.errored_files);
+                if cache.errored_files > before {
+                    self.emit(Event::UploadFailed {
+                        account: s.account.id.clone(),
+                        path: String::new(),
+                        message: format!(
+                            "{} file(s) of {} could not be uploaded. Nuage keeps retrying.",
+                            cache.errored_files, s.account.display_name
+                        ),
+                    });
+                }
                 runtime.disk_cache = Some(cache.clone());
             }
             let state = account_state(
                 s.paused,
                 s.mounted,
-                s.mount_error.as_deref(),
+                (s.mount_error.as_deref(), runtime.auth_error.as_deref()),
                 stats.as_ref(),
             );
             accounts.push(AccountStatus {
@@ -249,29 +302,49 @@ mod tests {
     }
 
     #[test]
-    fn states() {
-        assert_eq!(account_state(false, false, None, None), SyncState::Stopped);
+    fn auth_errors() {
+        assert!(is_auth_error(
+            "couldn't fetch token: invalid_grant: maybe token expired? - try refreshing with \"rclone config reconnect gdrive:\""
+        ));
+        assert!(is_auth_error(
+            "oauth2: \"invalid_client\" \"The OAuth client was deleted.\""
+        ));
+        assert!(!is_auth_error(
+            "dial tcp: lookup www.googleapis.com: no such host"
+        ));
         assert!(matches!(
-            account_state(false, false, Some("boom"), None),
+            account_state(false, true, (Some("mount"), Some("sign in")), None),
+            SyncState::Error { message, .. } if message == "sign in"
+        ));
+    }
+
+    #[test]
+    fn states() {
+        assert_eq!(
+            account_state(false, false, (None, None), None),
+            SyncState::Stopped
+        );
+        assert!(matches!(
+            account_state(false, false, (Some("boom"), None), None),
             SyncState::Error { .. }
         ));
         assert!(matches!(
-            account_state(false, true, None, None),
+            account_state(false, true, (None, None), None),
             SyncState::Error { .. }
         ));
         assert_eq!(
-            account_state(false, true, None, Some(&Ok(cache(0, 0)))),
+            account_state(false, true, (None, None), Some(&Ok(cache(0, 0)))),
             SyncState::UpToDate
         );
         assert_eq!(
-            account_state(false, true, None, Some(&Ok(cache(1, 2)))),
+            account_state(false, true, (None, None), Some(&Ok(cache(1, 2)))),
             SyncState::Syncing {
                 uploads: 1,
                 queued: 2
             }
         );
         assert_eq!(
-            account_state(true, true, None, Some(&Ok(cache(0, 3)))),
+            account_state(true, true, (None, None), Some(&Ok(cache(0, 3)))),
             SyncState::Paused { queued: 3 }
         );
         let failed = DiskCache {
@@ -279,7 +352,7 @@ mod tests {
             ..cache(0, 0)
         };
         assert!(matches!(
-            account_state(false, true, None, Some(&Ok(failed))),
+            account_state(false, true, (None, None), Some(&Ok(failed))),
             SyncState::Error {
                 failed_files: 2,
                 ..

@@ -136,6 +136,7 @@ impl Ui {
         header.pack_start(&add);
 
         let menu = gio::Menu::new();
+        menu.append(Some(&gettext("_Preferences")), Some("app.preferences"));
         menu.append(Some(&gettext("_About Nuage")), Some("app.about"));
         menu.append(Some(&gettext("_Quit")), Some("app.quit-all"));
         let menu_button = gtk::MenuButton::builder()
@@ -223,7 +224,7 @@ impl Ui {
                 .css_classes(["pill", "suggested-action"])
                 .build();
             let page = adw::StatusPage::builder()
-                .icon_name("folder-remote-symbolic")
+                .icon_name(nuage_core::APP_ID)
                 .title(gettext("No Accounts"))
                 .description(gettext(
                     "Connect a cloud storage account to see it as a folder.",

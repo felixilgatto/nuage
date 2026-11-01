@@ -118,6 +118,11 @@ fn rclone_error(what: &str, e: RcError) -> Error {
         RcError::Api { message, .. } => message.clone(),
         other => other.to_string(),
     };
+    if crate::status::is_auth_error(&message) {
+        return Error::AuthRequired(format!(
+            "{what}: the sign-in expired or was revoked. Reconnect the account (nuage account reconnect)."
+        ));
+    }
     Error::Rclone(format!("{what}: {message}"))
 }
 

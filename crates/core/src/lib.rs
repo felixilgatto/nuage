@@ -21,8 +21,8 @@ mod state;
 pub use account::{Account, AccountId, DEFAULT_CACHE_LIMIT, RemotePath};
 pub use capabilities::Capabilities;
 pub use command::{
-    AccountAddArgs, AccountStatus, Command, ConfigEntry, DaemonInfo, ProviderInfo, Reply, SignIn,
-    StatusReport,
+    AccountAddArgs, AccountStatus, Command, ConfigEntry, DaemonInfo, OAuthClientInfo, ProviderInfo,
+    Reply, SignIn, StatusReport,
 };
 pub use entry::{Badge, Entry, EntryKind, NativeDoc, NativeDocKind};
 pub use error::{Error, Result};

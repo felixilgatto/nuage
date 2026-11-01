@@ -5,9 +5,12 @@
 //! | `cache-limit` | cache limit of new accounts (`20G`) |
 //! | `<account>:cache-limit` | cache limit of one account |
 //! | `cache-max-age` | maximum age of cached files (`30d`) |
+//! | `<account>:cache-max-age` | the same for one account (`default`: the global one) |
+//! | `<account>:default-exclusions` | `on` or `off` |
 //! | `quit-with-pending` | `finish-in-background`, `ask` or `quit-now` |
 //!
-//! Cache settings apply the next time an account is mounted.
+//! Changing the cache settings of a mounted account remounts its hidden
+//! rclone mount (the folder stays; pending uploads go on after it).
 
 use nuage_core::{AccountId, ConfigEntry, Error, Result};
 
@@ -45,6 +48,10 @@ fn all_entries(st: &State, recommended_age: Option<u64>) -> Vec<ConfigEntry> {
             format_size(r.account.cache_limit),
         ));
         entries.push(entry(
+            format!("{}:{CACHE_MAX_AGE}", r.account.display_name),
+            age_text(r.cache_max_age_secs),
+        ));
+        entries.push(entry(
             format!("{}:{DEFAULT_EXCLUSIONS}", r.account.display_name),
             on_off(r.default_exclusions),
         ));
@@ -52,9 +59,25 @@ fn all_entries(st: &State, recommended_age: Option<u64>) -> Vec<ConfigEntry> {
     entries
 }
 
+fn age_text(secs: Option<u64>) -> String {
+    secs.map_or_else(|| "default".to_owned(), format_duration)
+}
+
+/// `default` or a duration.
+fn parse_age(value: &str) -> Result<Option<u64>> {
+    if value == "default" {
+        return Ok(None);
+    }
+    parse_duration(value).map(Some).ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "\"{value}\" is not a duration. Write it like 30d, 12h or 2w, or `default`."
+        ))
+    })
+}
+
 fn unknown_key(key: &str) -> Error {
     Error::InvalidArgument(format!(
-        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, <account>:{DEFAULT_EXCLUSIONS}, {CACHE_MAX_AGE}, {QUIT_WITH_PENDING}."
+        "Unknown setting \"{key}\". Settings: {CACHE_LIMIT}, <account>:{CACHE_LIMIT}, {CACHE_MAX_AGE}, <account>:{CACHE_MAX_AGE}, <account>:{DEFAULT_EXCLUSIONS}, {QUIT_WITH_PENDING}."
     ))
 }
 
@@ -88,6 +111,10 @@ impl Inner {
                     format!("{name}:{CACHE_LIMIT}"),
                     format_size(r.account.cache_limit),
                 )]),
+                CACHE_MAX_AGE => Ok(vec![entry(
+                    format!("{name}:{CACHE_MAX_AGE}"),
+                    age_text(r.cache_max_age_secs),
+                )]),
                 DEFAULT_EXCLUSIONS => Ok(vec![entry(
                     format!("{name}:{DEFAULT_EXCLUSIONS}"),
                     on_off(r.default_exclusions),
@@ -120,18 +147,30 @@ impl Inner {
             return self.config_get(Some(key)).await;
         }
         let mut st = self.state.lock().await;
+        // Mounted accounts whose cache options changed.
+        let mut remount: Vec<usize> = Vec::new();
         let result = if let Some((account, setting)) = key.rsplit_once(':') {
-            if setting != CACHE_LIMIT {
-                return Err(unknown_key(key));
-            }
-            let bytes = parse_size(value).ok_or_else(|| bad_size(value))?;
             let i = st.resolve(&AccountId::new(account))?;
-            let a = &mut st.config.accounts[i].account;
-            a.cache_limit = bytes;
-            entry(
-                format!("{}:{CACHE_LIMIT}", a.display_name),
-                format_size(bytes),
-            )
+            remount.push(i);
+            let r = &mut st.config.accounts[i];
+            match setting {
+                CACHE_LIMIT => {
+                    let bytes = parse_size(value).ok_or_else(|| bad_size(value))?;
+                    r.account.cache_limit = bytes;
+                    entry(
+                        format!("{}:{CACHE_LIMIT}", r.account.display_name),
+                        format_size(bytes),
+                    )
+                }
+                CACHE_MAX_AGE => {
+                    r.cache_max_age_secs = parse_age(value)?;
+                    entry(
+                        format!("{}:{CACHE_MAX_AGE}", r.account.display_name),
+                        age_text(r.cache_max_age_secs),
+                    )
+                }
+                _ => return Err(unknown_key(key)),
+            }
         } else {
             let s = &mut st.config.settings;
             match key {
@@ -140,18 +179,18 @@ impl Inner {
                     entry(key, format_size(s.default_cache_limit))
                 }
                 CACHE_MAX_AGE => {
-                    if value == "default" {
-                        s.cache_max_age_secs = None;
-                        entry(key, "default")
-                    } else {
-                        let secs = parse_duration(value).ok_or_else(|| {
-                            Error::InvalidArgument(format!(
-                                "\"{value}\" is not a duration. Write it like 30d, 12h or 2w, or `default`."
-                            ))
-                        })?;
-                        s.cache_max_age_secs = Some(secs);
-                        entry(key, format_duration(secs))
-                    }
+                    s.cache_max_age_secs = parse_age(value)?;
+                    let text = age_text(s.cache_max_age_secs);
+                    // Accounts without their own age follow this one.
+                    remount.extend(
+                        st.config
+                            .accounts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, r)| r.cache_max_age_secs.is_none())
+                            .map(|(i, _)| i),
+                    );
+                    entry(key, text)
                 }
                 QUIT_WITH_PENDING => {
                     s.quit_with_pending = QuitBehavior::parse(value).ok_or_else(|| {
@@ -168,6 +207,15 @@ impl Inner {
             }
         };
         self.save(&st)?;
+        for i in remount {
+            // `remount_hidden` skips accounts that are not mounted.
+            if let Err(e) = self.remount_hidden(&mut st, i).await {
+                tracing::warn!(error = %e, "cannot apply the new cache settings");
+                return Err(Error::Rclone(format!(
+                    "The setting is saved but could not be applied yet ({e}); it applies at the next mount."
+                )));
+            }
+        }
         Ok(vec![result])
     }
 }

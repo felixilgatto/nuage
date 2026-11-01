@@ -124,6 +124,8 @@ pub(crate) struct Runtime {
     quota: Option<Quota>,
     quota_at: Option<Instant>,
     disk_cache: Option<DiskCache>,
+    /// The provider refused the account's sign-in: it must be reconnected.
+    auth_error: Option<String>,
 }
 
 impl State {
@@ -338,6 +340,17 @@ impl Engine {
                 inner.cancel_sign_in(&session).await.map(|()| Reply::Done)
             }
 
+            Command::OAuthClientGet { provider } => {
+                inner.oauth_client(&provider).await.map(Reply::OAuthClient)
+            }
+            Command::OAuthClientSet {
+                provider,
+                client_id,
+                client_secret,
+            } => inner
+                .set_oauth_client(&provider, &client_id, &client_secret)
+                .await
+                .map(|()| Reply::Done),
             Command::AccountRemove { account, force } => inner
                 .remove_account(&account, force)
                 .await

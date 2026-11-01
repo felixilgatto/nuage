@@ -998,3 +998,39 @@ fn file_operations() {
             .any(|e| e["name"] == "offline")
     );
 }
+
+#[test]
+fn cache_settings_apply_to_mounted_accounts() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let (src, mount) = env.add_local("Cached");
+    std::fs::write(src.join("a.txt"), "a").unwrap();
+
+    let set = env.json(&["config", "set", "Cached:cache-max-age", "1h"]);
+    assert_eq!(set["Cached:cache-max-age"], "1h");
+    let set = env.json(&["config", "set", "Cached:cache-limit", "2G"]);
+    assert_eq!(set["Cached:cache-limit"], "2G");
+    // Applied by remounting the hidden mount: the folder stays usable.
+    assert!(fuse_mounted(&mount));
+    assert_eq!(std::fs::read_to_string(mount.join("a.txt")).unwrap(), "a");
+    std::fs::write(mount.join("b.txt"), "b").unwrap();
+    env.wait_until("b.txt is uploaded", Duration::from_secs(40), |_| {
+        src.join("b.txt").exists()
+    });
+    let all = env.json(&["config", "get"]);
+    assert_eq!(all["Cached:cache-max-age"], "1h");
+    let set = env.json(&["config", "set", "Cached:cache-max-age", "default"]);
+    assert_eq!(set["Cached:cache-max-age"], "default");
+    assert_eq!(
+        env.json_error(&["config", "set", "Cached:cache-max-age", "soon"], 2),
+        "invalid_argument"
+    );
+    // Survives a restart.
+    env.json(&["config", "set", "Cached:cache-max-age", "2w"]);
+    env.stop_daemon();
+    env.start_daemon();
+    assert_eq!(
+        env.json(&["config", "get", "Cached:cache-max-age"])["Cached:cache-max-age"],
+        "2w"
+    );
+}

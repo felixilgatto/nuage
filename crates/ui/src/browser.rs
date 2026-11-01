@@ -184,17 +184,8 @@ fn by_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
 }
 
 /// Remembered between launches.
-fn settings_file() -> PathBuf {
-    glib::user_config_dir().join("nuage").join("browser.ini")
-}
-
 fn load_mode() -> ViewMode {
-    let file = glib::KeyFile::new();
-    if file
-        .load_from_file(settings_file(), glib::KeyFileFlags::NONE)
-        .is_ok()
-        && file.string("browser", "view").is_ok_and(|v| v == "grid")
-    {
+    if crate::ini::get("browser-view").as_deref() == Some("grid") {
         ViewMode::Grid
     } else {
         ViewMode::List
@@ -202,15 +193,7 @@ fn load_mode() -> ViewMode {
 }
 
 fn save_mode(mode: ViewMode) {
-    let file = glib::KeyFile::new();
-    file.set_string("browser", "view", mode.key());
-    let path = settings_file();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Err(e) = file.save_to_file(&path) {
-        tracing::debug!(error = %e, "cannot save the browser settings");
-    }
+    crate::ini::set("browser-view", mode.key());
 }
 
 impl Browser {

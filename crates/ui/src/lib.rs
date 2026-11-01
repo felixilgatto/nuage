@@ -7,7 +7,10 @@
 
 mod backend;
 pub mod browser;
+mod ini;
 pub mod onboarding;
+pub mod preferences;
+pub mod reconnect;
 mod window;
 
 use gettextrs::gettext;

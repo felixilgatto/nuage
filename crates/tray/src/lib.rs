@@ -5,8 +5,7 @@
 //! on Ubuntu); without it, the main window must be enough.
 //!
 //! The icon shows the aggregated state; its menu shows each account's state,
-//! quota and cache, and the actions of the brief. "Preferences" comes with
-//! the preferences (milestone 10).
+//! quota and cache, and the actions of the brief.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -27,13 +26,17 @@ pub enum TrayAction {
     PauseAll,
     ResumeAll,
     AddAccount,
+    Preferences,
     Quit,
 }
+
+/// The application's own symbolic icon, shown when everything is up to date.
+pub const APP_ICON: &str = "io.github.felixilgatto.Nuage-symbolic";
 
 /// Icon name for an aggregated sync state.
 pub fn icon_for_state(state: &SyncState) -> &'static str {
     match state {
-        SyncState::UpToDate => "emblem-ok-symbolic",
+        SyncState::UpToDate => APP_ICON,
         SyncState::Syncing { .. } => "emblem-synchronizing-symbolic",
         SyncState::Paused { .. } | SyncState::Stopped => "media-playback-pause-symbolic",
         SyncState::Error { .. } => "dialog-warning-symbolic",
@@ -74,6 +77,7 @@ fn size(bytes: u64) -> String {
 pub struct NuageTray {
     status: Option<StatusReport>,
     on_action: Arc<dyn Fn(TrayAction) + Send + Sync>,
+    icon_theme_path: String,
 }
 
 impl NuageTray {
@@ -82,7 +86,15 @@ impl NuageTray {
         Self {
             status: None,
             on_action: Arc::new(on_action),
+            icon_theme_path: String::new(),
         }
+    }
+
+    /// An extra icon directory (with a `hicolor/` theme inside), for a
+    /// source build whose icons are not installed.
+    pub fn with_icon_theme_path(mut self, path: impl Into<String>) -> Self {
+        self.icon_theme_path = path.into();
+        self
     }
 
     /// `None`: the daemon is not reachable.
@@ -148,6 +160,10 @@ impl ksni::Tray for NuageTray {
 
     fn icon_name(&self) -> String {
         icon_for_state(&self.state()).to_owned()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        self.icon_theme_path.clone()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -223,6 +239,9 @@ impl ksni::Tray for NuageTray {
                 menu.push(self.item(gettext("Pause Uploads"), TrayAction::PauseAll));
             }
         }
+        if !status.accounts.is_empty() {
+            menu.push(self.item(gettext("Preferences"), TrayAction::Preferences));
+        }
         menu.push(self.item(gettext("Add Account…"), TrayAction::AddAccount));
         menu.push(ksni::MenuItem::Separator);
         menu.push(self.item(gettext("Quit"), TrayAction::Quit));
@@ -279,7 +298,8 @@ mod tests {
 
     #[test]
     fn icons() {
-        assert_eq!(icon_for_state(&SyncState::UpToDate), "emblem-ok-symbolic");
+        assert_eq!(icon_for_state(&SyncState::UpToDate), APP_ICON);
+        assert_eq!(APP_ICON, format!("{}-symbolic", nuage_core::APP_ID));
         assert_eq!(
             icon_for_state(&SyncState::Syncing {
                 uploads: 1,
@@ -302,6 +322,7 @@ mod tests {
         );
         assert!(l.contains(&"Open Folder".to_owned()));
         assert!(l.contains(&"Pause Uploads".to_owned()));
+        assert!(l.contains(&"Preferences".to_owned()));
 
         tray.set_status(Some(status(vec![
             account("A", SyncState::Paused { queued: 0 }),

@@ -14,7 +14,7 @@ use adw::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
 
-use nuage_core::{Command, Event, StatusReport};
+use nuage_core::{AccountId, Command, Event, StatusReport};
 use nuage_tray::{NuageTray, TrayAction};
 use nuage_ui::{Backend, BackendEvent, Ui};
 
@@ -64,7 +64,20 @@ fn main() -> glib::ExitCode {
     app.run_with_args(&args)
 }
 
+/// The icons of a source build (`data/icons`); installed icons are found
+/// in the system icon theme.
+fn source_icon_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
+    dir.is_dir().then_some(dir)
+}
+
 fn startup(app: &adw::Application, background: bool) {
+    let icon_dir = source_icon_dir();
+    if let (Some(dir), Some(display)) = (&icon_dir, gtk::gdk::Display::default()) {
+        gtk::IconTheme::for_display(&display).add_search_path(dir);
+    }
+    gtk::Window::set_default_icon_name(nuage_core::APP_ID);
+
     let (backend, events) = match Backend::start() {
         Ok(v) => v,
         Err(e) => {
@@ -92,7 +105,7 @@ fn startup(app: &adw::Application, background: bool) {
     let (tray_actions_tx, tray_actions) = async_channel::unbounded::<TrayAction>();
     let (tray_status, tray_status_rx) = async_channel::unbounded::<Option<StatusReport>>();
     let (tray_ok_tx, tray_ok) = async_channel::bounded::<bool>(1);
-    start_tray(tray_actions_tx, tray_status_rx, tray_ok_tx);
+    start_tray(tray_actions_tx, tray_status_rx, tray_ok_tx, icon_dir);
 
     // Startup: daemon, tray, then window or not.
     {
@@ -142,6 +155,11 @@ fn startup(app: &adw::Application, background: bool) {
                     BackendEvent::Event(Event::DaemonStopping) => {
                         let _ = tray_status.send(None).await;
                     }
+                    BackendEvent::Event(
+                        event @ (Event::AuthRequired { .. }
+                        | Event::UploadFailed { .. }
+                        | Event::CacheFull { .. }),
+                    ) => notify(&ui, &event),
                     BackendEvent::Event(_) => {}
                 }
             }
@@ -165,6 +183,7 @@ fn startup(app: &adw::Application, background: bool) {
                     TrayAction::PauseAll => app.activate_action("pause-all", None),
                     TrayAction::ResumeAll => app.activate_action("resume-all", None),
                     TrayAction::AddAccount => app.activate_action("add-account", None),
+                    TrayAction::Preferences => app.activate_action("preferences", None),
                     TrayAction::Quit => app.activate_action("quit-all", None),
                 }
             }
@@ -195,6 +214,51 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
         let ui = Rc::clone(ui);
         action("about", Box::new(move || nuage_ui::show_about(&ui.window)));
     }
+    {
+        let ui = Rc::clone(ui);
+        action(
+            "preferences",
+            Box::new(move || {
+                ui.present();
+                nuage_ui::preferences::show(&ui, &ui.window, None);
+            }),
+        );
+    }
+    app.set_accels_for_action("app.preferences", &["<Control>comma"]);
+    {
+        let ui = Rc::clone(ui);
+        action("open-window", Box::new(move || ui.present()));
+    }
+    // Notification buttons, with an account ID.
+    let reconnect = gio::SimpleAction::new("reconnect", Some(glib::VariantTy::STRING));
+    {
+        let ui = Rc::clone(ui);
+        reconnect.connect_activate(move |_, param| {
+            let Some(id) = param.and_then(|p| p.get::<String>()) else {
+                return;
+            };
+            let ui = Rc::clone(&ui);
+            ui.present();
+            glib::spawn_future_local(async move {
+                let window = ui.window.clone();
+                nuage_ui::reconnect::reconnect(&ui, &AccountId::new(id), &window).await;
+            });
+        });
+    }
+    app.add_action(&reconnect);
+    let account_preferences =
+        gio::SimpleAction::new("account-preferences", Some(glib::VariantTy::STRING));
+    {
+        let ui = Rc::clone(ui);
+        account_preferences.connect_activate(move |_, param| {
+            let Some(id) = param.and_then(|p| p.get::<String>()) else {
+                return;
+            };
+            ui.present();
+            nuage_ui::preferences::show(&ui, &ui.window, Some(&AccountId::new(id)));
+        });
+    }
+    app.add_action(&account_preferences);
     for (name, command) in [
         ("refresh", Command::Refresh { account: None }),
         ("pause-all", Command::Pause { account: None }),
@@ -270,6 +334,7 @@ fn start_tray(
     actions: async_channel::Sender<TrayAction>,
     status: async_channel::Receiver<Option<StatusReport>>,
     available: async_channel::Sender<bool>,
+    icon_dir: Option<PathBuf>,
 ) {
     let spawned = std::thread::Builder::new()
         .name("tray".into())
@@ -286,9 +351,12 @@ fn start_tray(
                 }
             };
             runtime.block_on(async move {
-                let tray = NuageTray::new(move |action| {
+                let mut tray = NuageTray::new(move |action| {
                     let _ = actions.send_blocking(action);
                 });
+                if let Some(dir) = icon_dir {
+                    tray = tray.with_icon_theme_path(dir.to_string_lossy());
+                }
                 match tray.spawn().await {
                     Ok(handle) => {
                         let _ = available.send(true).await;
@@ -307,4 +375,54 @@ fn start_tray(
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "cannot start the tray thread");
     }
+}
+
+/// Desktop notifications (Notification portal) for what needs the user.
+fn notify(ui: &Ui, event: &Event) {
+    let name = |id: &AccountId| {
+        ui.accounts()
+            .into_iter()
+            .find(|a| &a.account.id == id)
+            .map_or_else(|| id.as_str().to_owned(), |a| a.account.display_name)
+    };
+    let (key, notification) = match event {
+        Event::AuthRequired { account } => {
+            let n = gio::Notification::new(
+                &gettext("Sign in to {} again").replace("{}", &name(account)),
+            );
+            n.set_body(Some(&gettext(
+                "Its access expired or was revoked: files are not synced until you sign in.",
+            )));
+            n.set_priority(gio::NotificationPriority::High);
+            let target = account.as_str().to_variant();
+            n.add_button_with_target_value(&gettext("Sign In"), "app.reconnect", Some(&target));
+            n.set_default_action_and_target_value("app.reconnect", Some(&target));
+            (format!("auth-{account}"), n)
+        }
+        Event::UploadFailed {
+            account, message, ..
+        } => {
+            let n = gio::Notification::new(&gettext("Some files could not be uploaded"));
+            n.set_body(Some(message));
+            n.set_default_action("app.open-window");
+            (format!("upload-{account}"), n)
+        }
+        Event::CacheFull { account } => {
+            let n = gio::Notification::new(&gettext("The disk is full"));
+            n.set_body(Some(
+                &gettext(
+                    "Files of {} cannot be cached or uploaded. Free some space, or lower its cache limit.",
+                )
+                .replace("{}", &name(account)),
+            ));
+            n.add_button_with_target_value(
+                &gettext("Preferences"),
+                "app.account-preferences",
+                Some(&account.as_str().to_variant()),
+            );
+            (format!("cache-{account}"), n)
+        }
+        _ => return,
+    };
+    ui.app.send_notification(Some(&key), &notification);
 }

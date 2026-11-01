@@ -196,7 +196,7 @@ impl Inner {
                     && (input.client_id.is_none() || input.client_secret.is_none())
                 {
                     return Err(Error::InvalidArgument(format!(
-                        "{} needs your own OAuth client: pass --client-id and --client-secret. The README explains how to create one.",
+                        "{} needs your own OAuth client: pass --client-id and --client-secret. How to create one: https://github.com/felixilgatto/nuage/blob/main/docs/GOOGLE_OAUTH.md",
                         provider.display_name()
                     )));
                 }
@@ -290,6 +290,7 @@ impl Inner {
             auto_mount: mount,
             default_exclusions: true,
             exclusions: Vec::new(),
+            cache_max_age_secs: None,
         });
         let i = st.config.accounts.len() - 1;
         let mounted = match self.save(st) {
@@ -566,6 +567,103 @@ impl Inner {
         self.emit(Event::AccountRemoved {
             account: account.id.clone(),
         });
+        self.poll_status().await;
+        Ok(())
+    }
+}
+
+/// The user's OAuth client of a provider.
+impl Inner {
+    /// Remotes of the provider's accounts.
+    async fn provider_accounts(&self, provider: &str) -> Result<Vec<Account>> {
+        if self.registry.get(provider).is_none() {
+            return Err(Error::NotFound(format!("Unknown provider \"{provider}\".")));
+        }
+        let st = self.state.lock().await;
+        Ok(st
+            .config
+            .accounts
+            .iter()
+            .filter(|r| r.account.provider_id == provider)
+            .map(|r| r.account.clone())
+            .collect())
+    }
+
+    pub(crate) async fn oauth_client(&self, provider: &str) -> Result<nuage_core::OAuthClientInfo> {
+        let accounts = self.provider_accounts(provider).await?;
+        let rc = self.rc().await?;
+        let mut client_id = None;
+        for a in &accounts {
+            if let Ok(stored) = rc.config_get(&a.remote_name).await
+                && let Some(id) = stored
+                    .get("client_id")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+            {
+                client_id = Some(id.to_owned());
+                break;
+            }
+        }
+        Ok(nuage_core::OAuthClientInfo {
+            client_id,
+            accounts: accounts.into_iter().map(|a| a.id).collect(),
+        })
+    }
+
+    pub(crate) async fn set_oauth_client(
+        &self,
+        provider_id: &str,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<()> {
+        let provider = self
+            .registry
+            .get(provider_id)
+            .ok_or_else(|| Error::NotFound(format!("Unknown provider \"{provider_id}\".")))?;
+        if !matches!(
+            provider.auth(),
+            AuthSpec::OAuthBrowser { custom_client } if custom_client != CustomClient::Unsupported
+        ) {
+            return Err(Error::Unsupported(format!(
+                "{} does not use your own sign-in client.",
+                provider.display_name()
+            )));
+        }
+        let (client_id, client_secret) = (client_id.trim(), client_secret.trim());
+        let suffix_ok = provider
+            .client_id_suffix()
+            .is_none_or(|s| client_id.len() > s.len() && client_id.ends_with(s));
+        if client_id.is_empty() || client_secret.is_empty() || !suffix_ok {
+            return Err(Error::InvalidArgument(
+                "This client ID or secret is not valid: copy both from the client you created."
+                    .to_owned(),
+            ));
+        }
+        let accounts = self.provider_accounts(provider_id).await?;
+        let rc = self.rc().await?;
+        for account in &accounts {
+            let mut parameters = Map::new();
+            parameters.insert("client_id".into(), client_id.into());
+            parameters.insert("client_secret".into(), client_secret.into());
+            parameters.insert("config_refresh_token".into(), "false".into());
+            let outcome = rc.config_update(&account.remote_name, &parameters).await?;
+            if !outcome.error.is_empty() {
+                return Err(Error::Rclone(format!(
+                    "Cannot change the client of \"{}\": {}",
+                    account.display_name, outcome.error
+                )));
+            }
+            // Its token was issued to the old client.
+            let mut st = self.state.lock().await;
+            st.runtime(&account.id).auth_error = Some(format!(
+                "The sign-in client changed: sign in to {} again (nuage account reconnect \"{}\").",
+                account.display_name, account.display_name
+            ));
+            drop(st);
+            self.emit(Event::AuthRequired {
+                account: account.id.clone(),
+            });
+        }
         self.poll_status().await;
         Ok(())
     }

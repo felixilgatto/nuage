@@ -366,7 +366,12 @@ impl Inner {
             account,
             &plan,
             &provider.recommended_vfs_opts(),
-            st.config.settings.cache_max_age_secs,
+            st.config
+                .accounts
+                .iter()
+                .find(|r| r.account.id == account.id)
+                .and_then(|r| r.cache_max_age_secs)
+                .or(st.config.settings.cache_max_age_secs),
             &rules,
         )?;
         rc.mount(&request)

@@ -75,7 +75,7 @@ fn sign_in_error(raw: &str) -> Error {
         )
     } else if lower.contains("invalid_client") || lower.contains("unauthorized_client") {
         Error::AuthRequired(
-            "The provider refused the OAuth client. Check the client ID and secret (see the README)."
+            "The provider refused the OAuth client. Check the client ID and secret (see https://github.com/felixilgatto/nuage/blob/main/docs/GOOGLE_OAUTH.md)."
                 .to_owned(),
         )
     } else if lower.contains("access_denied") {
@@ -316,7 +316,11 @@ impl Inner {
         if st.is_mounted(&account.id) {
             self.unmount_locked(&mut st, &account).await?;
         }
-        st.runtime(&account.id).mount_error = None;
+        let runtime = st.runtime(&account.id);
+        runtime.mount_error = None;
+        runtime.auth_error = None;
+        // Check the quota (and so the sign-in) again at the next poll.
+        runtime.quota_at = None;
         if st.record(i).auto_mount {
             self.mount_locked(&mut st, i).await?;
         }

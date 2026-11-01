@@ -591,7 +591,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
             }
             if first && autostart.is_active() {
                 match ui.backend.request_autostart(true).await {
-                    Ok(true) => {}
+                    Ok(true) => crate::ini::set("autostart", "true"),
                     Ok(false) => ui.toast(&gettext(
                         "Starting at login was not allowed. You can change it in the system settings.",
                     )),

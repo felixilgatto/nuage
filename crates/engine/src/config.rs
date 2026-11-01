@@ -83,6 +83,9 @@ pub struct AccountRecord {
     pub default_exclusions: bool,
     #[serde(default, rename = "exclusion")]
     pub exclusions: Vec<StoredExclusion>,
+    /// Maximum age of cached files, in seconds. `None`: the global setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_max_age_secs: Option<u64>,
 }
 
 /// An exclusion rule of an account, as saved.
@@ -197,6 +200,7 @@ mod tests {
                     rule: StoredRule::Glob("*.log".into()),
                     created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                 }],
+                cache_max_age_secs: Some(3600),
             }],
         };
         config.save(&path).unwrap();
