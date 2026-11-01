@@ -18,6 +18,9 @@ use nuage_core::{AccountId, Command, Event, StatusReport};
 use nuage_tray::{NuageTray, TrayAction};
 use nuage_ui::{Backend, BackendEvent, Ui};
 
+/// Minimum delay between two restarts of a crashed daemon.
+const RESTART_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Where translations are installed (overridable for development).
 const DEFAULT_LOCALE_DIR: &str = "/app/share/locale";
 
@@ -138,21 +141,37 @@ fn startup(app: &adw::Application, background: bool) {
     {
         let (ui, tray_status) = (Rc::clone(&ui), tray_status.clone());
         glib::spawn_future_local(async move {
+            // A daemon that was connected and goes away without saying it
+            // stops has crashed: it is started again, at most once a minute
+            // (a daemon that cannot start is not started in a loop).
+            let mut connected = false;
+            let mut stopping = false;
+            let mut last_restart: Option<std::time::Instant> = None;
             while let Ok(event) = events.recv().await {
                 match event {
                     BackendEvent::Connected => {
+                        (connected, stopping) = (true, false);
                         ui.reload().await;
                         let _ = tray_status.send(ui.status()).await;
                     }
                     BackendEvent::Disconnected(message) => {
-                        ui.show_disconnected(&message);
+                        let crashed = std::mem::take(&mut connected) && !stopping;
                         let _ = tray_status.send(None).await;
+                        if crashed && last_restart.is_none_or(|t| t.elapsed() > RESTART_INTERVAL) {
+                            tracing::warn!("the Nuage service stopped; starting it again");
+                            last_restart = Some(std::time::Instant::now());
+                            if ui.backend.ensure_daemon().await.is_ok() {
+                                continue;
+                            }
+                        }
+                        ui.show_disconnected(&message);
                     }
                     BackendEvent::Event(Event::StatusChanged { status }) => {
                         let _ = tray_status.send(Some(status.clone())).await;
                         ui.show_status(status);
                     }
                     BackendEvent::Event(Event::DaemonStopping) => {
+                        stopping = true;
                         let _ = tray_status.send(None).await;
                     }
                     BackendEvent::Event(

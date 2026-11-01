@@ -13,8 +13,13 @@ use std::time::Duration;
 
 use nuage_core::{Error, Result};
 
-/// How long the keyring may take to answer (it may ask to be unlocked).
-const KEYRING_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the keyring may take to answer at the first try. Past it, a
+/// plain `rclone.conf` stays plain (a headless machine has no keyring).
+pub(crate) const KEYRING_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the keyring may take to answer once an encrypted `rclone.conf`
+/// is waiting for it: long enough to type the password of an unlock prompt.
+pub(crate) const KEYRING_UNLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 
 const ENCRYPTED_HEADER: &str = "# Encrypted rclone configuration File";
 
@@ -87,11 +92,20 @@ pub(crate) fn keyring_enabled() -> bool {
 
 /// Decides how `rclone.conf` is protected and makes it so: encrypts a plain
 /// file once a keyring password is available.
-pub(crate) async fn protect(config: &Path, rclone: &Path, use_keyring: bool) -> Result<Protection> {
+///
+/// An encrypted file without an answer from the keyring within `timeout` is
+/// [`Error::AuthRequired`]: at login, the keyring (or the portal in front
+/// of it) may not be ready yet, and the caller tries again.
+pub(crate) async fn protect(
+    config: &Path,
+    rclone: &Path,
+    use_keyring: bool,
+    timeout: Duration,
+) -> Result<Protection> {
     let password = if !use_keyring {
         None
     } else {
-        match tokio::time::timeout(KEYRING_TIMEOUT, keyring_password(config)).await {
+        match tokio::time::timeout(timeout, keyring_password(config)).await {
             Ok(Ok(password)) => Some(password),
             Ok(Err(e)) => {
                 tracing::info!(error = %e, "no keyring available");
@@ -107,7 +121,7 @@ pub(crate) async fn protect(config: &Path, rclone: &Path, use_keyring: bool) -> 
     let Some(password) = password else {
         if is_encrypted(config) {
             return Err(Error::AuthRequired(format!(
-                "{} is encrypted, but the keyring holding its password is not available. Unlock your keyring (log in to the desktop), then start nuaged again.",
+                "{} is encrypted, and the keyring holding its password does not answer. Nuage waits for it: unlock your keyring (log in to the desktop).",
                 config.display()
             )));
         }
@@ -159,7 +173,9 @@ mod tests {
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
         let rclone = Path::new("/nonexistent/rclone");
         assert_eq!(
-            protect(&config, rclone, false).await.unwrap(),
+            protect(&config, rclone, false, KEYRING_TIMEOUT)
+                .await
+                .unwrap(),
             Protection::Plain
         );
         let mode = std::fs::metadata(&config).unwrap().permissions().mode();
@@ -170,7 +186,9 @@ mod tests {
             format!("{ENCRYPTED_HEADER}\n\nRCLONE_ENCRYPT_V0:\nxx"),
         )
         .unwrap();
-        let err = protect(&config, rclone, false).await.unwrap_err();
+        let err = protect(&config, rclone, false, KEYRING_TIMEOUT)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::AuthRequired(_)), "{err:?}");
     }
 }

@@ -59,6 +59,9 @@ use config::{AccountRecord, AppConfig};
 /// Minimum delay between two restarts of a crashed rcd.
 const RESTART_BACKOFF: Duration = Duration::from_secs(5);
 
+/// Pause between two tries of a keyring that did not answer.
+const KEYRING_RETRY: Duration = Duration::from_secs(5);
+
 /// How the engine is set up by the daemon.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -93,6 +96,9 @@ pub(crate) struct Inner {
     sign_in: Mutex<Option<signin::PendingSignIn>>,
     /// `rclone.conf` is encrypted with a password from the keyring.
     config_encrypted: std::sync::atomic::AtomicBool,
+    /// Why rclone cannot start yet: the keyring holding the password of
+    /// `rclone.conf` does not answer (at login, it may not be ready).
+    keyring_wait: std::sync::Mutex<Option<String>>,
     pins: pins::Pins,
 }
 
@@ -208,6 +214,7 @@ impl Engine {
                 background: std::sync::Mutex::new(None),
                 sign_in: Mutex::new(None),
                 config_encrypted: std::sync::atomic::AtomicBool::new(false),
+                keyring_wait: std::sync::Mutex::new(None),
                 pins,
             }),
         })
@@ -234,6 +241,10 @@ impl Engine {
 
     /// Starts rclone, cleans up orphan mounts, remounts the accounts and
     /// starts the background task.
+    ///
+    /// When the keyring holding the password of `rclone.conf` does not
+    /// answer, waits for it as long as it takes: the accounts show why in
+    /// the meantime, and the other commands are served.
     pub async fn start(&self) -> Result<()> {
         self.inner.start_rcd().await?;
         self.inner.remount_all().await;
@@ -439,6 +450,9 @@ impl Inner {
 
     /// Client of the running rcd.
     pub(crate) async fn rc(&self) -> Result<RcClient> {
+        if let Some(message) = self.keyring_wait() {
+            return Err(Error::AuthRequired(message));
+        }
         self.rcd.lock().await.client.clone().ok_or_else(|| {
             Error::Rclone(
                 "rclone is not running. Nuage restarts it automatically; if this persists, check the daemon log (journalctl --user -u nuaged)."
@@ -447,15 +461,61 @@ impl Inner {
         })
     }
 
+    /// Why rclone waits for the keyring, if it does.
+    pub(crate) fn keyring_wait(&self) -> Option<String> {
+        self.keyring_wait.lock().expect("keyring lock").clone()
+    }
+
+    /// The protection of `rclone.conf`, retried until the keyring answers.
+    /// The rcd lock is not held meanwhile, so commands get an answer.
+    async fn protect_config(&self) -> Result<secrets::Protection> {
+        let rclone = self
+            .rcd
+            .lock()
+            .await
+            .supervisor
+            .config()
+            .rclone_path
+            .clone();
+        let use_keyring = secrets::keyring_enabled();
+        let mut timeout = secrets::KEYRING_TIMEOUT;
+        loop {
+            match secrets::protect(&self.paths.rclone_config, &rclone, use_keyring, timeout).await {
+                // Without a keyring to wait for, the error is final.
+                Err(Error::AuthRequired(message)) if use_keyring => {
+                    let first = self
+                        .keyring_wait
+                        .lock()
+                        .expect("keyring lock")
+                        .replace(message.clone())
+                        .is_none();
+                    if first {
+                        tracing::warn!("{message}");
+                        self.poll_status().await;
+                    }
+                    // Long enough for an unlock prompt from now on.
+                    timeout = secrets::KEYRING_UNLOCK_TIMEOUT;
+                    tokio::time::sleep(KEYRING_RETRY).await;
+                }
+                result => {
+                    if self
+                        .keyring_wait
+                        .lock()
+                        .expect("keyring lock")
+                        .take()
+                        .is_some()
+                    {
+                        tracing::info!("the keyring answered");
+                    }
+                    return result;
+                }
+            }
+        }
+    }
+
     async fn start_rcd(&self) -> Result<()> {
+        let protection = self.protect_config().await?;
         let mut rcd = self.rcd.lock().await;
-        let rclone = rcd.supervisor.config().rclone_path.clone();
-        let protection = secrets::protect(
-            &self.paths.rclone_config,
-            &rclone,
-            secrets::keyring_enabled(),
-        )
-        .await?;
         let password = match protection {
             secrets::Protection::Encrypted(p) => Some(p),
             secrets::Protection::Plain => None,
@@ -602,6 +662,21 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn commands_say_that_the_keyring_is_awaited() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let message = "the keyring does not answer".to_owned();
+        *engine.inner.keyring_wait.lock().unwrap() = Some(message.clone());
+        let err = engine
+            .handle(Command::Refresh { account: None })
+            .await
+            .unwrap_err();
+        assert_eq!(err, Error::AuthRequired(message));
+        // The status is still served.
+        assert!(engine.handle(Command::Status).await.is_ok());
     }
 
     #[tokio::test]

@@ -146,6 +146,10 @@ impl Backend {
         let log = log_file();
         let started = self
             .run(async move {
+                // The log of the previous run is kept: it says why it stopped.
+                if let Some(log) = &log {
+                    let _ = std::fs::rename(log, log.with_extension("log.old"));
+                }
                 let stderr = match log.as_ref().map(std::fs::File::create) {
                     Some(Ok(file)) => std::process::Stdio::from(file),
                     _ => std::process::Stdio::null(),

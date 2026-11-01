@@ -111,6 +111,7 @@ impl Inner {
     /// Polls rclone, updates the cached report, publishes the changes and
     /// returns the new report.
     pub(crate) async fn poll_status(&self) -> StatusReport {
+        let keyring_wait = self.keyring_wait();
         let snapshots: Vec<Snapshot> = {
             let st = self.state.lock().await;
             st.config
@@ -129,7 +130,9 @@ impl Inner {
                         account: r.account.clone(),
                         paused: r.paused,
                         mounted,
-                        mount_error: runtime.and_then(|rt| rt.mount_error.clone()),
+                        mount_error: keyring_wait
+                            .clone()
+                            .or_else(|| runtime.and_then(|rt| rt.mount_error.clone())),
                         quota_due: mounted && quota_capable && !quota_fresh,
                         offline: runtime.is_some_and(|rt| rt.offline && rt.fs.is_some()),
                     }

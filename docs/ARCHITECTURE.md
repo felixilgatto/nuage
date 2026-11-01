@@ -211,8 +211,14 @@ natively), creating a random one if needed, encrypts a plain
 `rclone.conf` once (`rclone config encryption set --password-command`), and
 passes it to rcd as `RCLONE_CONFIG_PASS`. Without a keyring (headless, or
 `NUAGE_KEYRING=off`), the file stays plain in mode `0600` and
-`StatusReport.config_encrypted` is `false`. An encrypted file without its
-keyring stops the daemon with a message. The password is never logged
+`StatusReport.config_encrypted` is `false`. An encrypted file whose keyring
+does not answer (at login, the portal or the keyring may not be ready, or
+the keyring waits to be unlocked) does not stop the daemon: it serves
+clients and tries again every 5 s (each try waiting up to 2 min for an unlock
+prompt). In the meantime every account shows why, and commands that need
+rclone answer with the same message. With `NUAGE_KEYRING=off` the daemon stops
+with a message. The window starts a daemon that crashed again, at most once
+a minute, and keeps the previous log as `nuaged.log.old`. The password is never logged
 (`RcdSupervisor`'s `Debug` hides it).
 
 ### Exclusions
@@ -414,8 +420,7 @@ checked) and produces in `target/dist/`:
 `../lib/nuage/rclone` next to its executable (both packages), then `PATH`.
 The rc client speaks plain HTTP to 127.0.0.1: there is no TLS stack, hence
 no system certificates and no C code in the build. The unit restarts the
-daemon on failure every 10 s without limit, for a keyring still locked right
-after boot.
+daemon on failure every 10 s without limit.
 
 ## Tests
 

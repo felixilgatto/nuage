@@ -142,12 +142,26 @@ async fn main() -> anyhow::Result<()> {
         "nuaged starting"
     );
     let engine = Engine::new(ProviderRegistry::with_enabled_providers(), config)?;
-    engine.start().await.context("cannot start rclone")?;
-    tracing::info!(providers = ?engine.registry(), "nuaged started");
-
     let (stop, mut stop_requests) = mpsc::channel(1);
     let events = engine.events();
     let daemon = Arc::new(Daemon { engine, stop });
+
+    // Clients are served while rclone starts: at login, the keyring may
+    // keep it waiting, and the accounts say so meanwhile.
+    let (start_failed, mut start_failure) = mpsc::channel::<nuage_core::Error>(1);
+    let starting = {
+        let daemon = Arc::clone(&daemon);
+        tokio::spawn(async move {
+            match daemon.engine.start().await {
+                Ok(()) => {
+                    tracing::info!(providers = ?daemon.engine.registry(), "nuaged started");
+                }
+                Err(e) => {
+                    let _ = start_failed.send(e).await;
+                }
+            }
+        })
+    };
 
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
@@ -155,6 +169,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::pin!(serve);
 
     let plan = tokio::select! {
+        Some(e) = start_failure.recv() => {
+            return Err(e).context("cannot start rclone");
+        }
         result = &mut serve => { result?; StopPlan::Now }
         _ = sigterm.recv() => { tracing::info!("SIGTERM received"); StopPlan::Now }
         _ = sigint.recv() => { tracing::info!("SIGINT received"); StopPlan::Now }
@@ -171,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    starting.abort();
     let _ = events.send(Event::DaemonStopping);
     if let Err(e) = daemon.engine.shutdown().await {
         tracing::error!(error = %e, "shutdown failed");
