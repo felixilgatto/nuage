@@ -38,8 +38,8 @@ Requirement: `fuse3` (installed by default on Ubuntu).
 
 **Uninstall** (desktop):
 
-1. Quit Nuage from its menu in the top bar (*Quit*), so your folders are
-   unmounted. Avoid `flatpak kill`, which leaves a broken folder behind.
+1. Quit Nuage (*Quit*, in its menu in the top bar or in the window's main
+   menu), so your folders are unmounted. Avoid `flatpak kill`, which leaves a broken folder behind.
 2. Remove the app and its data (settings, sign-ins, files kept offline):
 
    ```sh

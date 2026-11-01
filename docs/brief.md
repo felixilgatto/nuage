@@ -514,7 +514,7 @@ Objectif : **compte connecté et synchronisation lancée sans quitter la fenêtr
 4. **Lancer la synchronisation** :
    - **Dossier** : un `AdwActionRow` affiche le dossier pré-rempli (`~/Cloud/<nom-du-compte>`) avec un bouton « Choose… » (`gtk::FileDialog`). Validations de [Montage et dossier de montage](#montage-et-dossier-de-montage) ; erreur affichée sous la ligne ; bouton principal désactivé tant que le dossier est invalide.
    - **« Start automatically at login »** (`AdwSwitchRow`), **activé par défaut**. Il déclenche la demande au portail Background ; si le portail refuse, l'interrupteur se désactive et un toast explique pourquoi. C'est un réglage global (pas par compte), affiché seulement lors de l'ajout du premier compte, modifiable ensuite dans les réglages.
-   - Bouton principal **« Start sync »** (`suggested-action`) : crée le dossier si besoin et monte le compte. La fenêtre se ferme, l'application continue dans la barre système et envoie la notification « Google Drive is syncing to ~/Cloud/Google Drive » avec une action « Open folder ». **Si aucune barre système n'est disponible** (GNOME sans extension AppIndicator), la fenêtre affiche la fenêtre principale au lieu de se fermer.
+   - Bouton principal **« Start sync »** (`suggested-action`) : crée le dossier si besoin et monte le compte ; pendant ce temps il affiche un spinner (« Setting up the folder… ») et le formulaire est verrouillé. La fenêtre reste ouverte et revient à la liste des comptes, avec un toast « Google Drive is ready in ~/Cloud/Google Drive » et son action « Open Folder » ; si la fenêtre n'est plus au premier plan, la même chose part aussi en notification. (Jusqu'au polish 1, la fenêtre se fermait : la mise en route semblait avoir échoué.)
 
 Aux lancements suivants, si au moins un compte existe, l'application lancée par l'utilisateur ouvre la fenêtre principale ; démarrée à la connexion (`--background`), elle reste dans la barre système, fenêtre fermée (décidé au jalon 8).
 
@@ -739,7 +739,7 @@ Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucu
 
 - Sur une Ubuntu fraîche avec flatpak : installation du bundle, puis ajout du compte Drive entièrement depuis l'interface, auth dans le navigateur, **en 4 écrans** (fournisseur, client Google guidé, authentification, dossier + démarrage auto). Un utilisateur qui suit l'écran guidé crée son client GCP sans consulter d'autre documentation. Un second compte Google ne demande que 3 écrans.
 - Aucune autre question n'est posée pendant la mise en route.
-- Après « Start sync », la fenêtre se ferme, l'icône est dans la barre système et le dossier est monté.
+- Après « Start sync », la fenêtre affiche la liste des comptes avec « Open Folder », l'icône est dans la barre système et le dossier est monté.
 - Avec le démarrage auto activé, l'icône apparaît au login suivant sans action manuelle.
 
 **Headless**

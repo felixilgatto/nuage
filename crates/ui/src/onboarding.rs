@@ -73,8 +73,11 @@ fn main_button(label: &str) -> gtk::Button {
 }
 
 /// Shows that `button` is working: a spinner and `label`, or back to its
-/// normal `idle` label.
-fn set_busy(button: &gtk::Button, busy: Option<&str>, idle: &str) {
+/// normal `idle` label. `form` (the choices the button applies) is locked
+/// meanwhile; its sensitivity also tells validation not to re-enable the
+/// button.
+fn set_busy(button: &gtk::Button, form: &impl IsA<gtk::Widget>, busy: Option<&str>, idle: &str) {
+    form.set_sensitive(busy.is_none());
     match busy {
         Some(label) => {
             let content = gtk::Box::builder()
@@ -631,18 +634,20 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
     // Validation: the daemon applies the rules (empty folder, not inside
     // another account's folder…).
     let validate = {
-        let (ui, error, start, folder, id) = (
+        let (ui, error, start, form, folder, id) = (
             Rc::clone(ui),
             error.clone(),
             start.clone(),
+            group.clone(),
             Rc::clone(&folder),
             account.id.clone(),
         );
         move || {
-            let (ui, error, start, path, id) = (
+            let (ui, error, start, form, path, id) = (
                 Rc::clone(&ui),
                 error.clone(),
                 start.clone(),
+                form.clone(),
                 folder.borrow().clone(),
                 id.clone(),
             );
@@ -654,6 +659,10 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                         mount_point: path,
                     })
                     .await;
+                // Setup started meanwhile: the button shows its progress.
+                if !form.is_sensitive() {
+                    return;
+                }
                 match result {
                     Ok(_) => {
                         error.set_visible(false);
@@ -697,9 +706,9 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
     let ui2 = Rc::clone(ui);
     start.connect_clicked(move |button| {
         let idle = gettext("Start Sync");
-        set_busy(button, Some(&gettext("Setting up the folder…")), &idle);
+        set_busy(button, &group, Some(&gettext("Setting up the folder…")), &idle);
         let (ui, account, path) = (Rc::clone(&ui2), account.clone(), folder.borrow().clone());
-        let (button, autostart) = (button.clone(), autostart.clone());
+        let (button, group, autostart) = (button.clone(), group.clone(), autostart.clone());
         glib::spawn_future_local(async move {
             let mut account = account;
             if path != account.mount_point {
@@ -715,7 +724,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                     Ok(_) => {}
                     Err(e) => {
                         ui.toast(&e);
-                        set_busy(&button, None, &idle);
+                        set_busy(&button, &group, None, &idle);
                         return;
                     }
                 }
@@ -728,7 +737,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                 .await
             {
                 ui.toast(&e);
-                set_busy(&button, None, &idle);
+                set_busy(&button, &group, None, &idle);
                 return;
             }
             if first && autostart.is_active() {
@@ -750,19 +759,34 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
 
 /// The account is syncing: back to the accounts list, which shows its
 /// state, with a way to open the folder. The window stays open: closing it
-/// right away made the setup look like it had failed.
+/// right away made the setup look like it had failed. If the user left the
+/// window meanwhile, a notification tells them too.
 fn finish(ui: &Rc<Ui>, account: &Account) {
     ui.nav.pop_to_tag("home");
     let ui2 = Rc::clone(ui);
     glib::spawn_future_local(async move { ui2.reload().await });
+    let text = gettext("{account} is ready in {folder}")
+        .replace("{account}", &account.display_name)
+        .replace("{folder}", &display_path(&account.mount_point));
+    let target = account.mount_point.display().to_string().to_variant();
     ui.toast_with_action(
-        &gettext("{account} is ready in {folder}")
-            .replace("{account}", &account.display_name)
-            .replace("{folder}", &display_path(&account.mount_point)),
+        &text,
         &gettext("Open Folder"),
         "app.open-folder",
-        account.mount_point.display().to_string().to_variant(),
+        target.clone(),
     );
+    if !ui.window.is_active() {
+        let notification = gio::Notification::new(&gettext("Nuage"));
+        notification.set_body(Some(&text));
+        notification.set_default_action("app.open-window");
+        notification.add_button_with_target_value(
+            &gettext("Open Folder"),
+            "app.open-folder",
+            Some(&target),
+        );
+        ui.app
+            .send_notification(Some(&format!("ready-{}", account.id)), &notification);
+    }
 }
 
 #[cfg(test)]
