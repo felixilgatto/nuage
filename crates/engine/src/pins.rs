@@ -1149,7 +1149,10 @@ mod tests {
         assert!(crossed(&mut warned, &a, 11, Some(10)));
         assert!(!crossed(&mut warned, &a, 12, Some(10)), "once");
         assert!(!crossed(&mut warned, &a, 9, Some(10)));
-        assert!(crossed(&mut warned, &a, 11, Some(10)), "again after going under");
+        assert!(
+            crossed(&mut warned, &a, 11, Some(10)),
+            "again after going under"
+        );
         assert!(!crossed(&mut warned, &a, 1 << 40, None), "off");
     }
 

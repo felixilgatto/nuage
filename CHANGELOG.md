@@ -4,6 +4,7 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- OneDrive (personal): sign in in the browser, no client to create.
 - Offline mode: keep files and folders on this computer ("Keep Offline" in
   the browser, `nuage pin`). They open and can be edited without a
   connection, also after a restart; changes upload when it comes back, and a

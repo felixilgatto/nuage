@@ -24,8 +24,8 @@
       <li>Google Docs open in your web browser</li>
     </ul>
     <p>
-      Nuage uses rclone. Google Drive is supported; your own Google sign-in
-      client keeps your access private to you.
+      Nuage uses rclone. Google Drive and OneDrive are supported; for Google
+      Drive, your own sign-in client keeps your access private to you.
     </p>
   </description>
   <launchable type="desktop-id">io.github.felixilgatto.Nuage.desktop</launchable>
@@ -44,6 +44,7 @@
   <keywords>
     <keyword>cloud</keyword>
     <keyword>Google Drive</keyword>
+    <keyword>OneDrive</keyword>
     <keyword>sync</keyword>
   </keywords>
   <branding>

@@ -14,6 +14,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+/// Sign-ins use rclone's fixed port 53682: one test at a time.
+static SIGN_IN_PORT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn find_in_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|d| d.join(name))
@@ -646,6 +649,7 @@ fn http_get_body(url: &str) -> (String, Option<String>, String) {
 
 #[test]
 fn google_sign_in_can_be_cancelled() {
+    let _port = SIGN_IN_PORT.lock().unwrap_or_else(|e| e.into_inner());
     let mut env = env_or_skip!();
     env.start_daemon();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_nuage"));
@@ -1308,4 +1312,47 @@ fn offline_pinning() {
 
 fn libc_ehostunreach() -> i32 {
     113
+}
+
+#[test]
+fn onedrive_sign_in_starts_without_a_client() {
+    let _port = SIGN_IN_PORT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nuage"));
+    env.apply_env(&mut cmd);
+    // rclone's own Microsoft client: no --client-id needed.
+    let mut child = cmd
+        .args(["account", "add", "onedrive", "--no-browser"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut text = String::new();
+    let mut url = None;
+    while !text.contains("Waiting for the sign-in") {
+        let mut line = String::new();
+        let n = std::io::BufRead::read_line(&mut stderr, &mut line).unwrap();
+        assert!(n > 0, "no sign-in link in:\n{text}{}", env.log());
+        if let Some(start) = line.find("http://127.0.0.1:53682/") {
+            url = Some(line[start..].trim().to_owned());
+        }
+        text.push_str(&line);
+    }
+    let (status, location) = http_get(&url.expect("sign-in link"));
+    assert!(status.contains(" 30"), "{status}");
+    let location = location.unwrap();
+    assert!(
+        location.starts_with("https://login.microsoftonline.com/"),
+        "{location}"
+    );
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    assert_eq!(child.wait().unwrap().code(), Some(4));
+    assert_eq!(env.json(&["account", "list"]), Value::Array(vec![]));
 }

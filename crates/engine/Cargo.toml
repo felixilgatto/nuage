@@ -10,9 +10,11 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["local", "gdrive"]
-local = ["nuage-providers/local"]
-gdrive = ["nuage-providers/gdrive"]
+# The providers ready for users: those of nuage-providers' `default`, so that
+# adding a provider does not touch this crate. Builds with other providers
+# disable the default features and enable `nuage-providers/<id>`.
+default = ["default-providers"]
+default-providers = ["nuage-providers/default"]
 
 [dependencies]
 chrono.workspace = true

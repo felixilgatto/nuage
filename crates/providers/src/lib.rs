@@ -14,6 +14,8 @@
 pub mod gdrive;
 #[cfg(feature = "local")]
 pub mod local;
+#[cfg(feature = "onedrive")]
+pub mod onedrive;
 
 mod registry;
 

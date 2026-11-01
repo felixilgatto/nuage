@@ -11,7 +11,8 @@ the abstraction is missing something; extend `nuage-core` (e.g.
 1. `crates/providers/src/<id>.rs`: a type implementing `Provider` (see
    `gdrive.rs` and `local.rs`), with its unit tests.
 2. `crates/providers/Cargo.toml`: a feature named after the id. Add it to
-   `default` only when the provider is ready for users.
+   `default` only when the provider is ready for users: the engine (and so
+   `nuaged`) builds the providers of that list.
 3. `crates/providers/src/lib.rs`: the `#[cfg(feature = "<id>")] pub mod`
    line.
 4. `crates/providers/src/registry.rs`: one line in

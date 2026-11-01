@@ -24,6 +24,8 @@ impl ProviderRegistry {
         let mut registry = Self::new();
         #[cfg(feature = "gdrive")]
         registry.register(Box::new(crate::gdrive::GoogleDrive));
+        #[cfg(feature = "onedrive")]
+        registry.register(Box::new(crate::onedrive::OneDrive));
         #[cfg(feature = "local")]
         registry.register(Box::new(crate::local::Local));
         registry

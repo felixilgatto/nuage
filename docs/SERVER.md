@@ -68,6 +68,23 @@ nuage status
 To sign in again later, run `nuage account reconnect "Google Drive"` with
 the same option (`--no-browser` or `--token-file`).
 
+## Connect OneDrive
+
+No client to create. **With an SSH tunnel**, on the server:
+
+```sh
+nuage account add onedrive --no-browser
+```
+
+then open the tunnel and the link as for Google Drive above. **With a token
+made elsewhere**: on a computer with a browser and rclone, run
+`rclone authorize onedrive`, save the JSON it prints as `token.json`, then on
+the server:
+
+```sh
+nuage account add onedrive --token-file token.json --mount-point ~/Cloud/OneDrive
+```
+
 ## Logs and uninstall
 
 - Logs: `journalctl --user -u nuaged`.
