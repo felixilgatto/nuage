@@ -48,6 +48,8 @@ pub enum Badge {
     /// Listed from the cache while offline, and its content is not cached:
     /// it cannot be opened until the connection is back.
     OnlineOnly,
+    /// Kept on this computer, available offline (v1.1).
+    KeptOffline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

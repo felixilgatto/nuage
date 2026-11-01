@@ -5,12 +5,11 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 11. The daemon supervises rclone, signs in to Google
+> Status: milestone 12 (v1.1). The daemon supervises rclone, signs in to Google
 > Drive, mounts each account in two layers (`nuage-fs` over a hidden rclone
 > mount), applies exclusions, pauses uploads, reports the status and runs
 > file operations; the CLI and the desktop application (setup, main window,
-> tray, file browser) drive all of it. Pinning (v1.1) still returns
-> `not_implemented`.
+> tray, file browser) drive all of it. Offline pinning (v1.1) is in.
 
 ## Processes
 
@@ -354,6 +353,27 @@ then `PATH`; log in the user data folder) and never stops it on close.
   "ask", a dialog offers Wait / Quit Now.
 - Targets GTK 4.14 and libadwaita 1.5 (Ubuntu 24.04, CI); the GNOME 51
   runtime is newer.
+
+## Offline pinning (v1.1)
+
+Design: `docs/research/2026-11-01-milestone-12.md`.
+
+- `nuage-fs` sends a pinned path to the pin store (`data/pins/<account>`)
+  once its copy is there ([`PinView`] from the engine: pins, items deleted
+  locally, saved listings). Temporary files saved next to a pinned file
+  (`db.kdbx.Ab12Cd`) are pinned too, so saving by rename stays in the store.
+- Offline (`MountedFs::set_offline`), pinned items work, the others are
+  listed from the saved listings and fail with `EHOSTUNREACH` at once.
+- Engine (`pins.rs`, `pindb.rs`): SQLite with the pins, the reference state
+  of each item (remote size/date/hash, local size/date) and saved listings.
+  At every `offline-check-interval` (30 s) it checks the connection
+  (`operations/list` of the root), switches the folder offline or online,
+  and syncs: one side changed → it wins; both → conflict copy, both kept.
+  Downloads go through `data/pins-staging`, uploads wait 3 s of rest and the
+  end of a pause.
+- Without network at start-up, `nuage-fs` mounts alone and rclone's mount
+  follows when the connection is back. `NUAGE_TEST_OFFLINE=<file>`
+  simulates the loss of the network in tests.
 
 ## Flatpak package
 

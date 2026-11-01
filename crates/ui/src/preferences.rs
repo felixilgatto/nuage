@@ -25,6 +25,19 @@ use crate::window::Ui;
 /// Values of the daemon's `quit-with-pending` setting, in display order.
 const QUIT_CHOICES: [&str; 3] = ["finish-in-background", "ask", "quit-now"];
 
+/// Choices of "Check the connection every": `offline-check-interval`.
+const CHECK_CHOICES: [&str; 4] = ["30s", "1m", "5m", "15m"];
+
+fn check_label(value: &str) -> String {
+    match value {
+        "30s" => gettext("30 seconds"),
+        "1m" => gettext("1 minute"),
+        "5m" => gettext("5 minutes"),
+        "15m" => gettext("15 minutes"),
+        other => other.to_owned(),
+    }
+}
+
 /// Choices of "Keep cached files for": `cache-max-age` values.
 const AGE_CHOICES: [&str; 6] = ["default", "1d", "1w", "30d", "90d", "365d"];
 
@@ -177,6 +190,35 @@ fn general_page(ui: &Rc<Ui>, dialog: &adw::PreferencesDialog) -> adw::Preference
         ))
         .build();
     quit_group.add(&quit);
+    let labels: Vec<String> = CHECK_CHOICES.iter().map(|v| check_label(v)).collect();
+    let check = adw::ComboRow::builder()
+        .title(gettext("Check the Connection Every"))
+        .subtitle(gettext("Items kept offline are synced at the same pace"))
+        .model(&gtk::StringList::new(
+            &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+        ))
+        .build();
+    quit_group.add(&check);
+    {
+        let (ui, dialog, check) = (Rc::clone(ui), dialog.clone(), check.clone());
+        glib::spawn_future_local(async move {
+            if let Some(value) = get(&ui, "offline-check-interval").await
+                && let Some(i) = CHECK_CHOICES.iter().position(|c| *c == value)
+            {
+                check.set_selected(i as u32);
+            }
+            check.connect_selected_notify(move |row| {
+                if let Some(value) = CHECK_CHOICES.get(row.selected() as usize) {
+                    set(
+                        &ui,
+                        &dialog,
+                        "offline-check-interval".into(),
+                        (*value).into(),
+                    );
+                }
+            });
+        });
+    }
     page.add(&quit_group);
     {
         let (ui, dialog, quit) = (Rc::clone(ui), dialog.clone(), quit.clone());
@@ -473,6 +515,7 @@ fn account_page(
     page.add(&main);
 
     page.add(&cache_group(ui, dialog, status));
+    page.add(&offline_group(ui, dialog, status));
     page.add(&exclusions_group(ui, dialog, status));
 
     let danger = adw::PreferencesGroup::new();
@@ -607,6 +650,116 @@ fn cache_group(
 
 /// Lists an account's exclusions again.
 type Reload = Rc<dyn Fn()>;
+
+/// "Available Offline": the account's pinned items, their size, and
+/// "Remove Offline Copy".
+fn offline_group(
+    ui: &Rc<Ui>,
+    dialog: &adw::PreferencesDialog,
+    status: &AccountStatus,
+) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title(gettext("Available Offline"))
+        .description(
+            gettext(
+                "Kept on this computer and never removed from the cache: they open without a connection. In use: {}.",
+            )
+            .replace("{}", &crate::window::human_size(status.offline_used)),
+        )
+        .build();
+    let list = gtk::ListBox::builder()
+        .css_classes(["boxed-list"])
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    group.add(&list);
+    let reload: Reload = {
+        let cell: Rc<std::cell::RefCell<Option<Reload>>> = Rc::default();
+        let (ui, dialog, list, id) = (
+            Rc::clone(ui),
+            dialog.clone(),
+            list.clone(),
+            status.account.id.clone(),
+        );
+        let c = Rc::clone(&cell);
+        let f: Reload = Rc::new(move || {
+            let (ui, dialog, list, id, cell) = (
+                Rc::clone(&ui),
+                dialog.clone(),
+                list.clone(),
+                id.clone(),
+                Rc::clone(&c),
+            );
+            glib::spawn_future_local(async move {
+                let Ok(Reply::Pins(pins)) = ui
+                    .backend
+                    .call(Command::PinList {
+                        account: Some(id.clone()),
+                    })
+                    .await
+                else {
+                    return;
+                };
+                while let Some(child) = list.first_child() {
+                    list.remove(&child);
+                }
+                if pins.is_empty() {
+                    list.append(
+                        &adw::ActionRow::builder()
+                            .title(gettext("Nothing yet"))
+                            .subtitle(gettext(
+                                "In the file browser, right-click an item and choose “Keep Offline”.",
+                            ))
+                            .build(),
+                    );
+                }
+                for pin in pins {
+                    let title = if pin.path.is_empty() {
+                        "/".to_owned()
+                    } else {
+                        pin.path.clone()
+                    };
+                    let row = adw::ActionRow::builder()
+                        .title(glib::markup_escape_text(&title))
+                        .subtitle(crate::window::human_size(pin.size))
+                        .build();
+                    let remove = gtk::Button::builder()
+                        .label(gettext("Remove Offline Copy"))
+                        .valign(gtk::Align::Center)
+                        .build();
+                    let (ui, dialog, cell) = (Rc::clone(&ui), dialog.clone(), Rc::clone(&cell));
+                    let path = nuage_core::RemotePath::new(id.clone(), &pin.path);
+                    remove.connect_clicked(move |_| {
+                        let (ui, dialog, cell, path) = (
+                            Rc::clone(&ui),
+                            dialog.clone(),
+                            Rc::clone(&cell),
+                            path.clone(),
+                        );
+                        glib::spawn_future_local(async move {
+                            let commands = (
+                                Command::PinRemove {
+                                    path: path.clone(),
+                                    force: false,
+                                },
+                                Command::PinRemove { path, force: true },
+                            );
+                            apply_rule(&ui, &dialog, commands).await;
+                            if let Some(f) = cell.borrow().as_ref() {
+                                f();
+                            }
+                        });
+                    });
+                    row.add_suffix(&remove);
+                    list.append(&row);
+                }
+            });
+        });
+        *cell.borrow_mut() = Some(Rc::clone(&f));
+        f
+    };
+    reload();
+    group
+}
 
 fn rule_text(rule: &ExclusionRule) -> String {
     match rule {

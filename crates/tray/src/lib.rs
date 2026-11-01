@@ -199,6 +199,23 @@ impl ksni::Tray for NuageTray {
             menu.push(Self::info(
                 gettext("    Cache: {}").replace("{}", &size(a.cache_used)),
             ));
+            if a.offline_used > 0 {
+                menu.push(Self::info(
+                    gettext("    Offline: {}").replace("{}", &size(a.offline_used)),
+                ));
+            }
+            if a.pins_pending > 0 {
+                menu.push(Self::info(
+                    gettext("    {} offline change(s) to upload")
+                        .replace("{}", &a.pins_pending.to_string()),
+                ));
+            }
+            if a.pins_conflicts > 0 {
+                menu.push(Self::info(
+                    gettext("    {} conflict(s): both versions kept")
+                        .replace("{}", &a.pins_conflicts.to_string()),
+                ));
+            }
         }
         menu.push(ksni::MenuItem::Separator);
         menu.push(self.item(gettext("Open Nuage"), TrayAction::OpenWindow));

@@ -158,7 +158,11 @@ fn startup(app: &adw::Application, background: bool) {
                     BackendEvent::Event(
                         event @ (Event::AuthRequired { .. }
                         | Event::UploadFailed { .. }
-                        | Event::CacheFull { .. }),
+                        | Event::CacheFull { .. }
+                        | Event::PinStateChanged {
+                            state: nuage_core::PinState::Conflict,
+                            ..
+                        }),
                     ) => notify(&ui, &event),
                     BackendEvent::Event(_) => {}
                 }
@@ -421,6 +425,19 @@ fn notify(ui: &Ui, event: &Event) {
                 Some(&account.as_str().to_variant()),
             );
             (format!("cache-{account}"), n)
+        }
+        Event::PinStateChanged { account, path, .. } => {
+            let n = gio::Notification::new(&gettext("A file changed in two places"));
+            n.set_body(Some(
+                &gettext(
+                    "{file} was changed on this computer and in {account}. Both versions are kept: yours is now “{copy}”.",
+                )
+                .replace("{file}", path.split(" (conflict ").next().unwrap_or(path))
+                .replace("{account}", &name(account))
+                .replace("{copy}", path.rsplit('/').next().unwrap_or(path)),
+            ));
+            n.set_default_action("app.open-window");
+            (format!("conflict-{account}-{path}"), n)
         }
         _ => return,
     };

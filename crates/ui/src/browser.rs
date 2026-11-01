@@ -21,7 +21,7 @@ use gettextrs::gettext;
 use gtk::{gdk, gio, glib};
 
 use nuage_core::{
-    AccountId, AccountStatus, Badge, Capabilities, Command, Entry, Error, ExclusionRule,
+    AccountId, AccountStatus, Badge, Capabilities, Command, Entry, Error, ExclusionRule, PinState,
     RemotePath, Reply,
 };
 
@@ -87,6 +87,8 @@ pub struct Browser {
     actions: gio::SimpleActionGroup,
     empty_page: adw::StatusPage,
     error_page: adw::StatusPage,
+    /// "Available Offline": every pinned item.
+    offline_list: gtk::ListBox,
     mode: Cell<ViewMode>,
     state: RefCell<State>,
 }
@@ -143,6 +145,9 @@ fn state_label(entry: &Entry) -> String {
     }
     if entry.has(Badge::OnlineOnly) {
         parts.push(gettext("Online only"));
+    }
+    if entry.has(Badge::KeptOffline) {
+        parts.push(gettext("Available offline"));
     }
     if parts.is_empty() && entry.native_doc.is_some() {
         parts.push(gettext("Web document"));
@@ -279,6 +284,11 @@ impl Browser {
                 .icon_name("dialog-warning-symbolic")
                 .title(gettext("Cannot Open This Folder"))
                 .build(),
+            offline_list: gtk::ListBox::builder()
+                .css_classes(["boxed-list"])
+                .selection_mode(gtk::SelectionMode::None)
+                .valign(gtk::Align::Start)
+                .build(),
             mode: Cell::new(load_mode()),
             state: RefCell::new(State::default()),
         });
@@ -313,13 +323,14 @@ impl Browser {
         let this = Rc::clone(self);
         self.sidebar.connect_row_activated(move |_, row| {
             let accounts = this.ui.accounts();
-            if let Some(status) = usize::try_from(row.index())
-                .ok()
-                .and_then(|i| accounts.get(i))
-            {
+            let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
+            if let Some(status) = accounts.get(index) {
                 this.navigate(&status.account.id, "");
-                this.split.set_show_content(true);
+            } else {
+                // The last row: "Available Offline".
+                this.show_offline();
             }
+            this.split.set_show_content(true);
         });
     }
 
@@ -596,6 +607,22 @@ impl Browser {
             .valign(gtk::Align::Center)
             .build();
         self.stack.add_named(&loading, Some("loading"));
+        let offline = adw::Clamp::builder()
+            .maximum_size(720)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(12)
+            .margin_end(12)
+            .child(&self.offline_list)
+            .build();
+        self.stack.add_named(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .child(&offline)
+                .vexpand(true)
+                .build(),
+            Some("offline"),
+        );
 
         // Right click on the background: the folder's menu.
         let gesture = gtk::GestureClick::builder()
@@ -643,7 +670,9 @@ impl Browser {
 
     fn build_actions(self: &Rc<Self>) {
         type Handler = fn(&Rc<Browser>);
-        let simple: [(&str, Handler); 17] = [
+        let simple: [(&str, Handler); 19] = [
+            ("keep-offline", |b| b.set_pinned(true)),
+            ("remove-offline", |b| b.set_pinned(false)),
             ("open", |b| b.open_selected()),
             ("download", |b| b.download_selected()),
             ("rename", |b| b.rename_selected()),
@@ -796,6 +825,9 @@ impl Browser {
         self.set_enabled("show-folder", has_account && mounted);
         self.set_enabled("exclude", one && !excluded);
         self.set_enabled("include", one && excluded);
+        let kept = selected.first().is_some_and(|e| e.has(Badge::KeptOffline));
+        self.set_enabled("keep-offline", one && !kept && !excluded);
+        self.set_enabled("remove-offline", one && kept);
         self.set_enabled("new-folder", has_account);
         self.set_enabled("upload", has_account);
         self.set_enabled("refresh", has_account);
@@ -844,12 +876,25 @@ impl Browser {
                 (gettext("Cu_t"), "browser.cut", true),
                 (gettext("_Copy"), "browser.copy", true),
             ]);
+            let kept = one && selected[0].has(Badge::KeptOffline);
+            section(&[
+                (
+                    gettext("_Keep Offline"),
+                    "browser.keep-offline",
+                    one && !kept && !excluded,
+                ),
+                (
+                    gettext("Remove _Offline Copy"),
+                    "browser.remove-offline",
+                    kept,
+                ),
+            ]);
             section(&[
                 (gettext("_Rename…"), "browser.rename", one),
                 (
                     gettext("_Exclude From Sync"),
                     "browser.exclude",
-                    one && !excluded,
+                    one && !excluded && !kept,
                 ),
                 (gettext("_Include in Sync"), "browser.include", excluded),
             ]);
@@ -941,6 +986,32 @@ impl Browser {
             {
                 self.sidebar.select_row(Some(&r));
             }
+        }
+        if !accounts.is_empty() {
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(10)
+                .margin_top(6)
+                .margin_bottom(6)
+                .build();
+            row.append(&gtk::Image::from_icon_name("folder-download-symbolic"));
+            row.append(
+                &gtk::Label::builder()
+                    .label(gettext("Available Offline"))
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .build(),
+            );
+            let offline: u64 = accounts.iter().map(|a| a.offline_used).sum();
+            if offline > 0 {
+                row.append(
+                    &gtk::Label::builder()
+                        .label(human_size(offline))
+                        .css_classes(["dim-label", "numeric", "caption"])
+                        .build(),
+                );
+            }
+            self.sidebar.append(&row);
         }
         // The account shown was removed.
         if let Some(id) = current
@@ -1670,6 +1741,194 @@ impl Browser {
                 Err(message) => this.toast(&message),
             }
         });
+    }
+
+    /// "Available Offline": every pinned item, with its state and size.
+    fn show_offline(self: &Rc<Self>) {
+        {
+            let mut st = self.state.borrow_mut();
+            st.account = None;
+            st.generation += 1;
+        }
+        while let Some(child) = self.breadcrumb.first_child() {
+            self.breadcrumb.remove(&child);
+        }
+        self.content_page.set_title(&gettext("Available Offline"));
+        self.breadcrumb.append(
+            &gtk::Label::builder()
+                .label(gettext("Available Offline"))
+                .css_classes(["heading"])
+                .build(),
+        );
+        self.stack.set_visible_child_name("offline");
+        self.update_actions();
+        let this = Rc::clone(self);
+        glib::spawn_future_local(async move {
+            let pins = match this
+                .ui
+                .backend
+                .call(Command::PinList { account: None })
+                .await
+            {
+                Ok(Reply::Pins(pins)) => pins,
+                Ok(_) => Vec::new(),
+                Err(e) => {
+                    this.toast(&e);
+                    Vec::new()
+                }
+            };
+            this.fill_offline(pins);
+        });
+    }
+
+    fn fill_offline(self: &Rc<Self>, pins: Vec<nuage_core::Pin>) {
+        while let Some(child) = self.offline_list.first_child() {
+            self.offline_list.remove(&child);
+        }
+        if pins.is_empty() {
+            self.offline_list.append(
+                &adw::ActionRow::builder()
+                    .title(gettext("Nothing is kept offline"))
+                    .subtitle(gettext(
+                        "Right-click a file or folder and choose “Keep Offline”: it stays on this computer and opens without a connection.",
+                    ))
+                    .subtitle_lines(3)
+                    .build(),
+            );
+            return;
+        }
+        let accounts = self.ui.accounts();
+        for pin in pins {
+            let account = accounts.iter().find(|a| a.account.id == pin.account);
+            let name = account.map_or(pin.account.as_str().to_owned(), |a| {
+                a.account.display_name.clone()
+            });
+            let state = match pin.state {
+                PinState::Downloading => gettext("Downloading…"),
+                PinState::Available => gettext("Available offline"),
+                PinState::ModifiedLocally => ngettext_n(
+                    "{} change waiting to upload",
+                    "{} changes waiting to upload",
+                    pin.pending as usize,
+                ),
+                PinState::Conflict => gettext("Conflict: both versions were kept"),
+                PinState::Error => gettext("Problem: see the daemon log"),
+            };
+            let title = if pin.path.is_empty() {
+                name.clone()
+            } else {
+                pin.path.rsplit('/').next().unwrap_or(&pin.path).to_owned()
+            };
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&title))
+                .subtitle(glib::markup_escape_text(&format!(
+                    "{name}:{} · {} · {state}",
+                    pin.path,
+                    human_size(pin.size)
+                )))
+                .activatable(true)
+                .build();
+            row.add_prefix(&gtk::Image::from_icon_name(
+                if pin.kind == nuage_core::PinKind::FolderRecursive {
+                    "folder-symbolic"
+                } else {
+                    "text-x-generic-symbolic"
+                },
+            ));
+            let remove = gtk::Button::builder()
+                .icon_name("edit-delete-symbolic")
+                .tooltip_text(gettext("Remove Offline Copy"))
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
+            {
+                let this = Rc::clone(self);
+                let path = RemotePath::new(pin.account.clone(), &pin.path);
+                remove.connect_clicked(move |_| {
+                    let (this, path) = (Rc::clone(&this), path.clone());
+                    glib::spawn_future_local(async move {
+                        if this.unpin(path).await {
+                            this.show_offline();
+                        }
+                    });
+                });
+            }
+            row.add_suffix(&remove);
+            {
+                let this = Rc::clone(self);
+                let (id, path) = (pin.account.clone(), pin.path.clone());
+                let dir = pin.kind == nuage_core::PinKind::FolderRecursive;
+                row.connect_activated(move |_| {
+                    let folder = if dir { path.as_str() } else { parent(&path) };
+                    this.navigate(&id, folder);
+                });
+            }
+            self.offline_list.append(&row);
+        }
+    }
+
+    /// "Keep Offline" / "Remove Offline Copy".
+    fn set_pinned(self: &Rc<Self>, keep: bool) {
+        let Some(entry) = self.single() else { return };
+        let Some(path) = self.remote(&entry.path) else {
+            return;
+        };
+        let this = Rc::clone(self);
+        glib::spawn_future_local(async move {
+            if keep {
+                this.toast(&gettext("Downloading “{}”…").replace("{}", entry.display_name()));
+                this.set_busy(1);
+                let answer = this.ui.backend.call(Command::PinAdd { path }).await;
+                this.set_busy(-1);
+                match answer {
+                    Ok(_) => this.toast(
+                        &gettext("“{}” is available offline").replace("{}", entry.display_name()),
+                    ),
+                    Err(e) => this.toast(&e),
+                }
+            } else if this.unpin(path).await {
+                this.toast(
+                    &gettext("The offline copy of “{}” was removed")
+                        .replace("{}", entry.display_name()),
+                );
+            }
+            this.load();
+        });
+    }
+
+    /// Removes an offline copy; asks first if changes would be lost.
+    async fn unpin(self: &Rc<Self>, path: RemotePath) -> bool {
+        let command = |force| Command::PinRemove {
+            path: path.clone(),
+            force,
+        };
+        let mut answer = self.ui.backend.request(command(false)).await;
+        if let Ok(Err(Error::Busy(message))) = &answer {
+            let dialog = adw::AlertDialog::builder()
+                .heading(gettext("Changes Are Not Uploaded Yet"))
+                .body(message)
+                .build();
+            dialog.add_response("cancel", &gettext("_Keep It"));
+            dialog.add_response("remove", &gettext("_Remove and Lose Them"));
+            dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            if dialog.choose_future(Some(&self.window)).await != "remove" {
+                return false;
+            }
+            answer = self.ui.backend.request(command(true)).await;
+        }
+        match answer {
+            Ok(Ok(_)) => true,
+            Ok(Err(e)) => {
+                self.toast(&e.to_string());
+                false
+            }
+            Err(e) => {
+                self.toast(&e);
+                false
+            }
+        }
     }
 
     /// Shows the window, at `account` if given.

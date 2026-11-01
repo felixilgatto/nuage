@@ -4,6 +4,15 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- Offline mode: keep files and folders on this computer ("Keep Offline" in
+  the browser, `nuage pin`). They open and can be edited without a
+  connection, also after a restart; changes upload when it comes back, and a
+  file changed in two places keeps both versions.
+- Offline, the other items stay listed and fail to open at once, without
+  blocking file managers.
+- After signing in, the browser shows a Nuage page and Nuage comes back to
+  the front.
+
 ## [0.1.0] - 2026-11-01
 
 First version.

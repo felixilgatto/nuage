@@ -16,6 +16,7 @@ Files, work on your documents as usual: Nuage keeps them in sync.
 - See how much space is used and free.
 - Pause and resume uploads.
 - Leave some folders out of sync.
+- Keep files and folders available offline (e.g. a password database).
 - Works on servers too, from the command line.
 
 Providers: **Google Drive** today; OneDrive and others later

@@ -245,6 +245,7 @@ async fn ls(cli: &Cli, path: &RemotePath) -> Result<(), Failure> {
                 Badge::Uploading => "uploading",
                 Badge::NotSynced => "not synced",
                 Badge::OnlineOnly => "online only",
+                Badge::KeptOffline => "offline",
             });
         }
         let notes = if notes.is_empty() {

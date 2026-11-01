@@ -31,6 +31,8 @@ struct Target {
     capabilities: Capabilities,
     native_docs: Option<NativeDocPolicy>,
     exclusions: ExclusionSet,
+    /// The provider cannot be reached (v1.1).
+    offline: bool,
 }
 
 impl Target {
@@ -224,6 +226,7 @@ impl Inner {
             hidden: runtime
                 .and_then(|r| r.mounted.as_ref())
                 .map(|plan| plan.rclone_mount_point.clone()),
+            offline: runtime.is_some_and(|r| r.offline),
             capabilities: runtime
                 .and_then(|r| r.capabilities.clone())
                 .unwrap_or_else(|| provider.static_capabilities()),
@@ -279,6 +282,9 @@ impl Inner {
     pub(crate) async fn list_files(&self, at: &RemotePath) -> Result<Vec<Entry>> {
         let target = self.target(&at.account).await?;
         let path = clean(&at.path)?;
+        if target.offline || crate::pins::test_offline() {
+            return Ok(self.list_offline(&target, &path));
+        }
         let rc = self.rc().await?;
         let mut entries = match rc.list(&target.fs, &path).await {
             Ok(items) => {
@@ -320,9 +326,20 @@ impl Inner {
         } else {
             Vec::new()
         };
+        let pins = self
+            .pins
+            .db
+            .pins(Some(&target.account.id))
+            .unwrap_or_default();
         for entry in &mut entries {
             if target.exclusions.is_excluded(&entry.path) {
                 entry.badges.push(Badge::NotSynced);
+            }
+            if pins
+                .iter()
+                .any(|p| crate::pindb::within(&entry.path, &p.path))
+            {
+                entry.badges.push(Badge::KeptOffline);
             }
             let uploading = queue.iter().any(|q| {
                 if entry.is_dir() {
@@ -354,6 +371,85 @@ impl Inner {
         }
         sort(&mut entries);
         Ok(entries)
+    }
+
+    /// Offline: the pinned items of the store, then the saved listing
+    /// (greyed: "online only").
+    fn list_offline(&self, target: &Target, path: &str) -> Vec<Entry> {
+        let id = &target.account.id;
+        let store = self.paths.pin_store(id).join(path);
+        let mut entries: Vec<Entry> = Vec::new();
+        if let Ok(dir) = std::fs::read_dir(&store) {
+            for e in dir.flatten() {
+                let Ok(meta) = e.metadata() else { continue };
+                let name = e.file_name().to_string_lossy().into_owned();
+                let rel = join(path, &name);
+                entries.push(Entry {
+                    native_doc: (!meta.is_dir())
+                        .then(|| {
+                            target
+                                .native_docs
+                                .as_ref()
+                                .and_then(|p| p.detect(&name, None))
+                        })
+                        .flatten(),
+                    name,
+                    path: rel,
+                    kind: if meta.is_dir() {
+                        EntryKind::Folder
+                    } else {
+                        EntryKind::File
+                    },
+                    size: (!meta.is_dir()).then_some(meta.len()),
+                    modified: meta.modified().ok().map(chrono::DateTime::from),
+                    mime: None,
+                    hash: None,
+                    badges: vec![Badge::KeptOffline],
+                });
+            }
+        }
+        let pins = self.pins.db.pins(Some(id)).unwrap_or_default();
+        let saved = self.pins.db.listings(id).unwrap_or_default();
+        for item in saved.get(path).into_iter().flatten() {
+            if entries.iter().any(|e| e.name == item.name) {
+                continue;
+            }
+            let rel = join(path, &item.name);
+            let pinned_parent = pins.iter().any(|p| within(&p.path, &rel));
+            let mut badges = vec![];
+            // Folders holding pinned items open; everything else waits for
+            // the connection.
+            if !(item.dir && pinned_parent) {
+                badges.push(Badge::OnlineOnly);
+            }
+            if target.exclusions.is_excluded(&rel) {
+                badges.push(Badge::NotSynced);
+            }
+            entries.push(Entry {
+                native_doc: (!item.dir)
+                    .then(|| {
+                        target
+                            .native_docs
+                            .as_ref()
+                            .and_then(|p| p.detect(&item.name, None))
+                    })
+                    .flatten(),
+                name: item.name.clone(),
+                path: rel,
+                kind: if item.dir {
+                    EntryKind::Folder
+                } else {
+                    EntryKind::File
+                },
+                size: (!item.dir).then_some(item.size),
+                modified: chrono::DateTime::from_timestamp(item.mtime, 0),
+                mime: None,
+                hash: None,
+                badges,
+            });
+        }
+        sort(&mut entries);
+        entries
     }
 
     pub(crate) async fn mkdir(&self, at: &RemotePath) -> Result<()> {
