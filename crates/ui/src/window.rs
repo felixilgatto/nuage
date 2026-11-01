@@ -115,6 +115,18 @@ impl Ui {
         self.toasts.add_toast(adw::Toast::new(text));
     }
 
+    /// A toast with one button running `action` (an `app.` action).
+    pub fn toast_with_action(&self, text: &str, button: &str, action: &str, target: glib::Variant) {
+        let toast = adw::Toast::builder()
+            .title(text)
+            .button_label(button)
+            .action_name(action)
+            .action_target(&target)
+            .timeout(10)
+            .build();
+        self.toasts.add_toast(toast);
+    }
+
     pub fn set_tray_available(&self, available: bool) {
         self.state.borrow_mut().tray = available;
     }

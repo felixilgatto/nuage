@@ -4,6 +4,9 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- After adding an account, the window stays open on the accounts list, with
+  "Open Folder"; "Start Sync" shows that it is working.
+- How to uninstall, in the README.
 - OneDrive (personal): sign in in the browser, no client to create.
 - Google shared drives, each as an account of its own, added from a Google
   account without signing in again.

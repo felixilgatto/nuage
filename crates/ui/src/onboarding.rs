@@ -72,6 +72,29 @@ fn main_button(label: &str) -> gtk::Button {
         .build()
 }
 
+/// Shows that `button` is working: a spinner and `label`, or back to its
+/// normal `idle` label.
+fn set_busy(button: &gtk::Button, busy: Option<&str>, idle: &str) {
+    match busy {
+        Some(label) => {
+            let content = gtk::Box::builder()
+                .spacing(8)
+                .halign(gtk::Align::Center)
+                .build();
+            let spinner = gtk::Spinner::new();
+            spinner.start();
+            content.append(&spinner);
+            content.append(&gtk::Label::new(Some(label)));
+            button.set_child(Some(&content));
+            button.set_sensitive(false);
+        }
+        None => {
+            button.set_label(idle);
+            button.set_sensitive(true);
+        }
+    }
+}
+
 fn open_uri(ui: &Ui, url: &str) {
     gtk::UriLauncher::new(url).launch(Some(&ui.window), gio::Cancellable::NONE, |result| {
         if let Err(e) = result {
@@ -673,7 +696,8 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
     let title = account.display_name.clone();
     let ui2 = Rc::clone(ui);
     start.connect_clicked(move |button| {
-        button.set_sensitive(false);
+        let idle = gettext("Start Sync");
+        set_busy(button, Some(&gettext("Setting up the folder…")), &idle);
         let (ui, account, path) = (Rc::clone(&ui2), account.clone(), folder.borrow().clone());
         let (button, autostart) = (button.clone(), autostart.clone());
         glib::spawn_future_local(async move {
@@ -691,7 +715,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                     Ok(_) => {}
                     Err(e) => {
                         ui.toast(&e);
-                        button.set_sensitive(true);
+                        set_busy(&button, None, &idle);
                         return;
                     }
                 }
@@ -704,7 +728,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                 .await
             {
                 ui.toast(&e);
-                button.set_sensitive(true);
+                set_busy(&button, None, &idle);
                 return;
             }
             if first && autostart.is_active() {
@@ -724,30 +748,21 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
     page(&title, &content)
 }
 
-/// The account is syncing: tell the user, and leave the window.
+/// The account is syncing: back to the accounts list, which shows its
+/// state, with a way to open the folder. The window stays open: closing it
+/// right away made the setup look like it had failed.
 fn finish(ui: &Rc<Ui>, account: &Account) {
-    let notification = gio::Notification::new(&gettext("Nuage"));
-    notification.set_body(Some(
-        &gettext("{account} is syncing to {folder}")
-            .replace("{account}", &account.display_name)
-            .replace("{folder}", &display_path(&account.mount_point)),
-    ));
-    notification.add_button_with_target_value(
-        &gettext("Open Folder"),
-        "app.open-folder",
-        Some(&account.mount_point.display().to_string().to_variant()),
-    );
-    ui.app
-        .send_notification(Some(&format!("synced-{}", account.id)), &notification);
-
     ui.nav.pop_to_tag("home");
     let ui2 = Rc::clone(ui);
     glib::spawn_future_local(async move { ui2.reload().await });
-    // With a tray icon, the application lives there; otherwise the window
-    // is the only way back.
-    if ui.tray_available() {
-        ui.window.close();
-    }
+    ui.toast_with_action(
+        &gettext("{account} is ready in {folder}")
+            .replace("{account}", &account.display_name)
+            .replace("{folder}", &display_path(&account.mount_point)),
+        &gettext("Open Folder"),
+        "app.open-folder",
+        account.mount_point.display().to_string().to_variant(),
+    );
 }
 
 #[cfg(test)]

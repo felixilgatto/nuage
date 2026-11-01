@@ -36,6 +36,22 @@ Until then, see [building from source](docs/BUILDING.md).
 
 Requirement: `fuse3` (installed by default on Ubuntu).
 
+**Uninstall** (desktop):
+
+1. Quit Nuage from its menu in the top bar (*Quit*), so your folders are
+   unmounted. Avoid `flatpak kill`, which leaves a broken folder behind.
+2. Remove the app and its data (settings, sign-ins, files kept offline):
+
+   ```sh
+   flatpak uninstall --user --delete-data io.github.felixilgatto.Nuage
+   rm -f ~/.config/autostart/io.github.felixilgatto.Nuage.desktop
+   ```
+
+   Flatpak does not remove the start-at-login entry: the second line does.
+   Your cloud folders stay, empty; delete them if you want.
+3. Optionally, withdraw Nuage's access to your account on the provider's
+   site (Google: <https://myaccount.google.com/permissions>).
+
 ## Get started
 
 1. Open Nuage and pick a provider.
