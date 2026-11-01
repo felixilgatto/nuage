@@ -1,0 +1,19 @@
+# systemd user unit of the Nuage daemon.
+#   systemctl --user enable --now nuaged
+#   loginctl enable-linger "$USER"    # run without an open session (servers)
+[Unit]
+Description=Nuage: cloud storage mounted as folders
+Documentation=https://github.com/felixilgatto/nuage
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nuaged
+# Unmounting and stopping rclone can take a few seconds.
+TimeoutStopSec=60
+# On a desktop the keyring may still be locked right after boot: retry.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=default.target

@@ -42,17 +42,50 @@ flatpak install --user nuage.flatpak
 
 Requirement: `fuse3` (installed by default on Ubuntu).
 
-## Install on a server (headless) *(planned)*
+## Install on a server (headless)
 
-A `.deb` package and a tarball will be attached to each release:
+Nuage runs on a server without a screen, entirely from the command line,
+with no interactive prompt. The packages contain static binaries and the
+rclone version Nuage is tested with (installed apart from any other
+rclone). Until the first release, download them from the `nuage-native`
+artifact of a [CI run](https://github.com/felixilgatto/nuage/actions), or
+build them with `scripts/build-native.sh`.
+
+Requirements: Linux x86-64 with systemd, and `fuse3`.
+
+**With the `.deb`** (Debian, Ubuntu; installs `fuse3` too):
 
 ```sh
-sudo apt install ./nuage_<version>_amd64.deb      # or: tar xf … && ./install.sh
+sudo apt install ./nuage_<version>_amd64.deb
+```
+
+**Or with the tarball**, without root (installs into `~/.local`):
+
+```sh
+tar xf nuage-<version>-x86_64-linux.tar.gz
+./nuage-<version>-x86_64-linux/install.sh
+```
+
+Then start the daemon, and keep it running when you are logged out:
+
+```sh
 systemctl --user enable --now nuaged
-loginctl enable-linger "$USER"                     # keep running without a session
-nuage account add gdrive --token-file token.json --mount-point ~/Cloud/Drive
+loginctl enable-linger "$USER"     # also mounts your folders at boot
+```
+
+Connect Google Drive, with your own OAuth client (see
+[Create your own Google OAuth client](#create-your-own-google-oauth-client)),
+either through an SSH tunnel or with a token made on another computer (see
+[On a server without a browser](#on-a-server-without-a-browser)):
+
+```sh
+nuage account add gdrive --client-id <id> --client-secret <secret> \
+    --token-file token.json --mount-point ~/Cloud/Drive
 nuage status
 ```
+
+Logs: `journalctl --user -u nuaged`. Uninstall: `sudo apt remove nuage`, or
+`install.sh --uninstall` (your settings stay in `~/.config/nuage`).
 
 ## Building from source
 
@@ -70,6 +103,8 @@ first in your `PATH`.
 ```sh
 cargo build            # default members: everything except the GTK crates
 cargo test             # end-to-end tests are skipped without rclone and FUSE
+scripts/build-native.sh   # static tarball and .deb in target/dist/ (needs the
+                          # x86_64-unknown-linux-musl target and cargo-deb)
 export NUAGE_RCLONE=/path/to/rclone
 cargo run -p nuaged &  # start the daemon (socket in $XDG_RUNTIME_DIR/nuage/)
 mkdir -p /tmp/files && echo hello > /tmp/files/hello.txt

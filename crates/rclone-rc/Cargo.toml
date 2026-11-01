@@ -13,7 +13,6 @@ publish.workspace = true
 nuage-core.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -57,10 +57,6 @@ struct ApiError {
 impl RcClient {
     /// Creates a client for the rcd at `base` (e.g. `http://127.0.0.1:5572/`).
     pub fn new(base: &str, user: &str, pass: &str) -> Result<Self, RcError> {
-        // reqwest is built with rustls without a default crypto provider;
-        // install `ring` once per process. Failure means another provider is
-        // already installed, which is fine.
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let mut base = Url::parse(base)?;
         if !base.path().ends_with('/') {
             base.set_path(&format!("{}/", base.path()));

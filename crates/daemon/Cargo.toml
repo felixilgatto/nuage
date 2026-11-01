@@ -24,6 +24,29 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# Debian package of the headless install (`scripts/build-native.sh`).
+[package.metadata.deb]
+name = "nuage"
+maintainer = "felixilgatto <felix.capuano@gmail.com>"
+copyright = "Nuage contributors"
+license-file = ["../../LICENSE", "0"]
+section = "utils"
+priority = "optional"
+depends = "fuse3"
+extended-description = """\
+Nuage mounts cloud storage accounts (Google Drive…) as local folders, with \
+a local cache, pause and resume of uploads, and a status report. This \
+package contains the daemon (nuaged), the command-line tool (nuage) and the \
+bundled rclone; it has no graphical dependency."""
+assets = [
+    ["target/release/nuaged", "usr/bin/", "755"],
+    ["target/release/nuage", "usr/bin/", "755"],
+    ["../../target/rclone/rclone", "usr/lib/nuage/", "755"],
+    ["../../build-aux/native/nuaged.service", "usr/lib/systemd/user/", "644"],
+    ["../../README.md", "usr/share/doc/nuage/", "644"],
+    ["../../target/rclone/COPYING", "usr/share/doc/nuage/rclone-COPYING", "644"],
+]
+
 [dev-dependencies]
 tempfile.workspace = true
 

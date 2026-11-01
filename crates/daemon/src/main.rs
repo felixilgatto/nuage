@@ -26,7 +26,7 @@ struct Args {
     #[arg(long, env = "NUAGE_SOCKET", value_name = "PATH")]
     socket: Option<PathBuf>,
 
-    /// rclone binary (default: /app/bin/rclone in the Flatpak, else rclone from PATH).
+    /// rclone binary (default: the bundled one, else rclone from PATH).
     #[arg(long, env = "NUAGE_RCLONE", value_name = "PATH")]
     rclone: Option<PathBuf>,
 }
@@ -70,9 +70,18 @@ fn find_rclone(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path);
     }
-    let bundled = Path::new("/app/bin/rclone");
-    if bundled.exists() {
-        return Ok(bundled.to_owned());
+    // Flatpak, then the native packages: rclone in `../lib/nuage/` next to
+    // nuaged (/usr/bin → /usr/lib/nuage, ~/.local/bin → ~/.local/lib/nuage).
+    let mut bundled = vec![PathBuf::from("/app/bin/rclone")];
+    if let Some(bin_dir) = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+    {
+        bundled.push(bin_dir.join("../lib/nuage/rclone"));
+    }
+    if let Some(found) = bundled.into_iter().find(|p| p.is_file()) {
+        return Ok(found.canonicalize().unwrap_or(found));
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
     let found = std::env::split_paths(&path)

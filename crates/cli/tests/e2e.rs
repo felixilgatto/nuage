@@ -6,6 +6,7 @@
 //! `NUAGE_E2E_REQUIRED=1` (set in CI), which turns a skip into a failure.
 //! `nuaged` must be built and up to date: `cargo test --workspace`, or
 //! `cargo test -p nuaged -p nuage` (`-p nuage` alone does not rebuild it).
+//! `NUAGE_TEST_NUAGED` points the tests at another `nuaged` binary.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -41,6 +42,10 @@ fn usable_rclone() -> Result<PathBuf, String> {
 }
 
 fn nuaged_binary() -> PathBuf {
+    // Packaged binaries (e.g. the static build) can be tested too.
+    if let Some(path) = std::env::var_os("NUAGE_TEST_NUAGED") {
+        return PathBuf::from(path);
+    }
     let nuage = PathBuf::from(env!("CARGO_BIN_EXE_nuage"));
     let nuaged = nuage.with_file_name("nuaged");
     assert!(

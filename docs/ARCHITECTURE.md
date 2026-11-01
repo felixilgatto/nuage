@@ -237,6 +237,28 @@ and are queued again at the next mount.
 | VFS cache | `~/.cache/nuage/rclone/` | `cache/rclone/` |
 | `rcd.pid`, hidden mounts | `~/.local/share/nuage/` | `data/` |
 
+## Native packages
+
+`scripts/build-native.sh` builds `nuaged` and `nuage` for
+`x86_64-unknown-linux-musl` (static: they run on any x86-64 Linux, whatever
+its glibc), fetches the pinned rclone (`scripts/fetch-rclone.sh`, sha256
+checked) and produces in `target/dist/`:
+
+- `nuage-<version>-x86_64-linux.tar.gz`: binaries, rclone,
+  `build-aux/native/install.sh` (installs into `~/.local` without root) and
+  the systemd user unit;
+- `nuage_<version>_amd64.deb` (`cargo-deb`, metadata in
+  `crates/daemon/Cargo.toml`): `/usr/bin/{nuaged,nuage}`,
+  `/usr/lib/nuage/rclone`, `/usr/lib/systemd/user/nuaged.service`,
+  depends on `fuse3`.
+
+`nuaged` looks for rclone in `NUAGE_RCLONE`, `/app/bin/rclone` (Flatpak),
+`../lib/nuage/rclone` next to its executable (both packages), then `PATH`.
+The rc client speaks plain HTTP to 127.0.0.1: there is no TLS stack, hence
+no system certificates and no C code in the build. The unit restarts the
+daemon on failure every 10 s without limit, for a keyring still locked right
+after boot.
+
 ## Tests
 
 - Unit tests in each crate.
@@ -247,6 +269,10 @@ and are queued again at the next mount.
   links, `statfs`, concurrent access, waiting for and timing out on an
   unavailable backing folder.
 - `crates/fuse-relay/tests/relay.rs`: a real rclone mount through the relay.
+- CI `native` job: the end-to-end tests against the static `nuaged`, then
+  `scripts/smoke-native.sh` installs the `.deb` in clean Ubuntu 24.04 and
+  Debian 12 containers, mounts a `local` account and reads and writes
+  through it.
 - `crates/cli/tests/e2e.rs`: real `nuaged` and `nuage` processes, a real
   rclone and FUSE, the `local` provider, an isolated home. Covers adding,
   renaming, mounting (both layers), unmounting, removing accounts, pause
