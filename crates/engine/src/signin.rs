@@ -26,6 +26,12 @@ use crate::Inner;
 /// rclone's question that leads to the browser sign-in.
 pub(crate) const BROWSER_QUESTION: &str = "config_is_local";
 
+/// Where rclone serves the sign-in page.
+const SIGN_IN_ADDR: &str = "127.0.0.1:53682";
+
+/// How long a new sign-in waits for the previous one's port.
+const PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How long a sign-in may take.
 pub(crate) const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -129,6 +135,11 @@ impl Inner {
             return Err(Error::Busy(
                 "Another sign-in is in progress. Finish or cancel it first.".to_owned(),
             ));
+        }
+        // A sign-in just cancelled: rclone frees its port a moment later.
+        let deadline = Instant::now() + PORT_RELEASE_TIMEOUT;
+        while std::net::TcpListener::bind(SIGN_IN_ADDR).is_err() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
         Ok(())
     }
