@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 adw.workspace = true
 async-channel.workspace = true
+gettext-rs.workspace = true
 gtk.workspace = true
 nuage-core.workspace = true
 nuage-tray.workspace = true

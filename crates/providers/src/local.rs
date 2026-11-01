@@ -42,6 +42,7 @@ impl Provider for Local {
                 label: "Folder".to_owned(),
                 secret: false,
                 required: true,
+                folder: true,
             }],
         }
     }

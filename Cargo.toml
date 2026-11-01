@@ -37,6 +37,7 @@ nuage-engine = { path = "crates/engine" }
 nuage-fs = { path = "crates/fs" }
 nuage-tray = { path = "crates/tray" }
 nuage-ui = { path = "crates/ui" }
+ashpd = { version = "0.12", default-features = false }
 
 # Third-party crates
 anyhow = "1"
@@ -61,8 +62,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 
 # GTK / desktop only. Never pulled by `nuaged` or `nuage` (checked by scripts/check-deps.sh).
-gtk = { package = "gtk4", version = "0.11" }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
+# GTK 4.14 and libadwaita 1.5: what Ubuntu 24.04 (CI) has; the GNOME 51
+# runtime is newer.
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 async-channel = "2"
 ksni = "0.3"
 gettext-rs = { version = "0.8", features = ["gettext-system"] }

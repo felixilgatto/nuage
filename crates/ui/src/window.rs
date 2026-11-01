@@ -1,0 +1,322 @@
+//! The main window: the accounts, their state and quota, and "+".
+
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use adw::prelude::*;
+use gettextrs::gettext;
+use gtk::{gio, glib};
+
+use nuage_core::{AccountStatus, Command, ProviderInfo, Reply, StatusReport, SyncState};
+
+use crate::Backend;
+
+/// Everything the interface shares.
+#[derive(Debug)]
+pub struct Ui {
+    pub app: adw::Application,
+    pub backend: Backend,
+    pub window: adw::ApplicationWindow,
+    pub(crate) nav: adw::NavigationView,
+    toasts: adw::ToastOverlay,
+    accounts_box: gtk::Box,
+    pub(crate) state: RefCell<UiState>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct UiState {
+    pub(crate) report: Option<StatusReport>,
+    pub(crate) providers: Vec<ProviderInfo>,
+    /// The system tray shows the icon: the window can close after setup.
+    pub(crate) tray: bool,
+}
+
+/// A short, human state line.
+pub fn state_text(state: &SyncState) -> String {
+    match state {
+        SyncState::UpToDate => gettext("Up to date"),
+        SyncState::Syncing { uploads, queued } => {
+            let n = uploads + queued;
+            if n == 1 {
+                gettext("Syncing 1 file")
+            } else {
+                gettext("Syncing {} files").replace("{}", &n.to_string())
+            }
+        }
+        SyncState::Paused { queued: 0 } => gettext("Paused"),
+        SyncState::Paused { queued } => {
+            gettext("Paused, {} waiting").replace("{}", &queued.to_string())
+        }
+        SyncState::Error { message, .. } => message.clone(),
+        SyncState::Stopped => gettext("Not mounted"),
+        SyncState::Offline => gettext("Offline"),
+    }
+}
+
+/// Icon of a state, as in the tray.
+pub fn state_icon(state: &SyncState) -> &'static str {
+    match state {
+        SyncState::UpToDate => "emblem-ok-symbolic",
+        SyncState::Syncing { .. } => "emblem-synchronizing-symbolic",
+        SyncState::Paused { .. } | SyncState::Stopped => "media-playback-pause-symbolic",
+        SyncState::Error { .. } => "dialog-warning-symbolic",
+        SyncState::Offline => "network-offline-symbolic",
+    }
+}
+
+/// Bytes for people (`1.5 GB`).
+pub fn human_size(bytes: u64) -> String {
+    glib::format_size(bytes).to_string()
+}
+
+/// Opens a folder in the file manager.
+pub fn open_folder(window: &impl IsA<gtk::Window>, path: &std::path::Path) {
+    let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(path)));
+    launcher.launch(Some(window), gio::Cancellable::NONE, |result| {
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "cannot open the folder");
+        }
+    });
+}
+
+impl Ui {
+    pub fn new(app: &adw::Application, backend: Backend) -> Rc<Self> {
+        let nav = adw::NavigationView::new();
+        let toasts = adw::ToastOverlay::new();
+        toasts.set_child(Some(&nav));
+        let window = adw::ApplicationWindow::builder()
+            .application(app)
+            .title("Nuage")
+            .default_width(560)
+            .default_height(620)
+            .content(&toasts)
+            .build();
+        // Closing the window does not stop anything: it only hides it.
+        window.set_hide_on_close(true);
+
+        let accounts_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let ui = Rc::new(Self {
+            app: app.clone(),
+            backend,
+            window,
+            nav,
+            toasts,
+            accounts_box,
+            state: RefCell::new(UiState::default()),
+        });
+        ui.nav.add(&ui.home_page());
+        ui
+    }
+
+    pub fn toast(&self, text: &str) {
+        self.toasts.add_toast(adw::Toast::new(text));
+    }
+
+    pub fn set_tray_available(&self, available: bool) {
+        self.state.borrow_mut().tray = available;
+    }
+
+    pub fn tray_available(&self) -> bool {
+        self.state.borrow().tray
+    }
+
+    /// Shows the window, at the accounts list.
+    pub fn present(&self) {
+        self.window.present();
+    }
+
+    fn home_page(self: &Rc<Self>) -> adw::NavigationPage {
+        let header = adw::HeaderBar::new();
+        let add = gtk::Button::from_icon_name("list-add-symbolic");
+        add.set_tooltip_text(Some(&gettext("Add Account")));
+        add.set_action_name(Some("app.add-account"));
+        header.pack_start(&add);
+
+        let menu = gio::Menu::new();
+        menu.append(Some(&gettext("_About Nuage")), Some("app.about"));
+        menu.append(Some(&gettext("_Quit")), Some("app.quit-all"));
+        let menu_button = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .menu_model(&menu)
+            .primary(true)
+            .tooltip_text(gettext("Main Menu"))
+            .build();
+        header.pack_end(&menu_button);
+
+        let clamp = adw::Clamp::builder()
+            .maximum_size(560)
+            .child(&self.accounts_box)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        let scrolled = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&clamp)
+            .vexpand(true)
+            .build();
+
+        let view = adw::ToolbarView::new();
+        view.add_top_bar(&header);
+        view.set_content(Some(&scrolled));
+        adw::NavigationPage::builder()
+            .title("Nuage")
+            .tag("home")
+            .child(&view)
+            .build()
+    }
+
+    /// Reloads the providers and the status from the daemon.
+    pub async fn reload(self: &Rc<Self>) {
+        if let Ok(Reply::Providers(p)) = self.backend.call(Command::ListProviders).await {
+            self.state.borrow_mut().providers = p;
+        }
+        match self.backend.call(Command::Status).await {
+            Ok(Reply::Status(report)) => self.show_status(report),
+            Ok(_) => {}
+            Err(e) => self.show_disconnected(&e),
+        }
+    }
+
+    /// The last status report shown.
+    pub fn status(&self) -> Option<StatusReport> {
+        self.state.borrow().report.clone()
+    }
+
+    pub fn providers(&self) -> Vec<ProviderInfo> {
+        self.state.borrow().providers.clone()
+    }
+
+    pub fn accounts(&self) -> Vec<AccountStatus> {
+        self.state
+            .borrow()
+            .report
+            .as_ref()
+            .map(|r| r.accounts.clone())
+            .unwrap_or_default()
+    }
+
+    /// The daemon is not reachable.
+    pub fn show_disconnected(&self, message: &str) {
+        clear(&self.accounts_box);
+        let page = adw::StatusPage::builder()
+            .icon_name("network-offline-symbolic")
+            .title(gettext("The Nuage Service Is Not Running"))
+            .description(message)
+            .vexpand(true)
+            .build();
+        self.accounts_box.append(&page);
+    }
+
+    /// Shows a new status report.
+    pub fn show_status(self: &Rc<Self>, report: StatusReport) {
+        clear(&self.accounts_box);
+        if report.accounts.is_empty() {
+            let add = gtk::Button::builder()
+                .label(gettext("Add Account"))
+                .action_name("app.add-account")
+                .halign(gtk::Align::Center)
+                .css_classes(["pill", "suggested-action"])
+                .build();
+            let page = adw::StatusPage::builder()
+                .icon_name("folder-remote-symbolic")
+                .title(gettext("No Accounts"))
+                .description(gettext(
+                    "Connect a cloud storage account to see it as a folder.",
+                ))
+                .child(&add)
+                .vexpand(true)
+                .build();
+            self.accounts_box.append(&page);
+        } else {
+            let group = adw::PreferencesGroup::new();
+            for status in &report.accounts {
+                group.add(&self.account_row(status));
+            }
+            self.accounts_box.append(&group);
+        }
+        self.state.borrow_mut().report = Some(report);
+    }
+
+    fn account_row(self: &Rc<Self>, status: &AccountStatus) -> adw::ActionRow {
+        let account = &status.account;
+        let icon = self
+            .providers()
+            .iter()
+            .find(|p| p.id == account.provider_id)
+            .map(|p| p.icon_name.clone())
+            .unwrap_or_else(|| "folder-remote-symbolic".to_owned());
+
+        let mut subtitle = state_text(&status.state);
+        if let Some(q) = &status.quota
+            && let (Some(used), Some(total)) = (q.used, q.total)
+        {
+            subtitle.push_str(" · ");
+            subtitle.push_str(
+                &gettext("{used} of {total} used")
+                    .replace("{used}", &human_size(used))
+                    .replace("{total}", &human_size(total)),
+            );
+        }
+        let row = adw::ActionRow::builder()
+            .title(&account.display_name)
+            .subtitle(glib::markup_escape_text(&subtitle))
+            .build();
+        row.add_prefix(&gtk::Image::from_icon_name(&icon));
+        let state_image = gtk::Image::from_icon_name(state_icon(&status.state));
+        state_image.set_tooltip_text(Some(&state_text(&status.state)));
+        row.add_suffix(&state_image);
+
+        if let Some(percent) = status.quota.and_then(|q| q.used_percent()) {
+            let bar = gtk::LevelBar::builder()
+                .min_value(0.0)
+                .max_value(100.0)
+                .value(percent)
+                .width_request(64)
+                .valign(gtk::Align::Center)
+                .build();
+            row.add_suffix(&bar);
+        }
+
+        if status.mounted {
+            let open = gtk::Button::builder()
+                .icon_name("folder-open-symbolic")
+                .tooltip_text(gettext("Open Folder"))
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
+            let window = self.window.clone();
+            let path: PathBuf = account.mount_point.clone();
+            open.connect_clicked(move |_| open_folder(&window, &path));
+            row.add_suffix(&open);
+            row.set_activatable_widget(Some(&open));
+        } else {
+            let mount = gtk::Button::builder()
+                .label(gettext("Mount"))
+                .valign(gtk::Align::Center)
+                .build();
+            let ui = Rc::clone(self);
+            let id = account.id.clone();
+            mount.connect_clicked(move |_| {
+                let ui = Rc::clone(&ui);
+                let id = id.clone();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = ui.backend.call(Command::Mount { account: id }).await {
+                        ui.toast(&e);
+                    }
+                    ui.reload().await;
+                });
+            });
+            row.add_suffix(&mount);
+        }
+        row
+    }
+}
+
+fn clear(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}

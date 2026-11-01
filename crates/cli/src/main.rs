@@ -371,6 +371,7 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                 client_secret: add.client_secret.clone(),
                 no_browser: add.no_browser,
                 params: add.params.iter().cloned().collect(),
+                no_mount: false,
             };
             let mut client = connect(cli).await?;
             let reply = client.request(Command::AccountAdd(args)).await??;
@@ -426,6 +427,34 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                 print_json(&a);
             } else {
                 println!("Renamed \"{name}\" to \"{}\".", a.display_name);
+            }
+            Ok(())
+        }
+        AccountCommand::Move {
+            account: name,
+            folder,
+        } => {
+            let folder =
+                std::path::absolute(folder).map_err(|e| usage(format!("Invalid folder: {e}")))?;
+            let Reply::Account(a) = request(
+                cli,
+                Command::AccountSetMountPoint {
+                    account: account(name),
+                    mount_point: folder,
+                },
+            )
+            .await?
+            else {
+                return Err(unexpected());
+            };
+            if cli.json {
+                print_json(&a);
+            } else {
+                println!(
+                    "\"{}\" is now mounted at {}.",
+                    a.display_name,
+                    a.mount_point.display()
+                );
             }
             Ok(())
         }

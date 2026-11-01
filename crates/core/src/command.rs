@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Account, AccountId, AuthKind, Capabilities, Entry, Exclusion, ExclusionRule, Pin, PinKind,
-    Quota, RemotePath, SyncState,
+    Account, AccountId, AuthKind, Capabilities, CredentialField, CustomClient, Entry, Exclusion,
+    ExclusionRule, GuideStep, Pin, PinKind, Quota, RemotePath, SyncState,
 };
 
 /// A request from a client (CLI, GTK app, tray) to the daemon.
@@ -49,6 +49,20 @@ pub enum Command {
     /// Cancels a sign-in; nothing is kept.
     SignInCancel {
         session: String,
+    },
+    /// Moves the account to another folder: unmounts it, then mounts it at
+    /// the new folder (if it is set to be mounted).
+    AccountSetMountPoint {
+        account: AccountId,
+        mount_point: PathBuf,
+    },
+    /// Checks that a folder can be used to mount an account (`account`:
+    /// the account that would move there, if any). Replies `Done` or the
+    /// reason it cannot.
+    ValidateMountPoint {
+        #[serde(default)]
+        account: Option<AccountId>,
+        mount_point: PathBuf,
     },
     AccountRemove {
         account: AccountId,
@@ -162,6 +176,10 @@ pub struct AccountAddArgs {
     /// the `local` provider).
     #[serde(default)]
     pub params: BTreeMap<String, String>,
+    /// Create the account without mounting it (the desktop setup mounts it
+    /// at its last screen, with `Mount`).
+    #[serde(default)]
+    pub no_mount: bool,
 }
 
 /// Successful reply to a [`Command`].
@@ -245,6 +263,18 @@ pub struct ProviderInfo {
     pub display_name: String,
     pub icon_name: String,
     pub auth: AuthKind,
+    /// For OAuth providers: whether the user brings their own client.
+    #[serde(default)]
+    pub oauth_client: Option<CustomClient>,
+    /// For credentials providers: the form to fill.
+    #[serde(default)]
+    pub credentials: Vec<CredentialField>,
+    /// For providers whose users create their own OAuth client: how to.
+    #[serde(default)]
+    pub client_guide: Vec<GuideStep>,
+    /// The end of a valid client ID (e.g. `.apps.googleusercontent.com`).
+    #[serde(default)]
+    pub client_id_suffix: Option<String>,
     pub capabilities: Capabilities,
 }
 

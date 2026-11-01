@@ -37,7 +37,10 @@ const SERVER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) enum SignInKind {
     /// A new account, saved and mounted once signed in. Its remote exists
     /// already and is deleted if the sign-in fails.
-    Add(Account),
+    Add {
+        account: Account,
+        mount: bool,
+    },
     Reconnect(AccountId),
 }
 
@@ -155,7 +158,7 @@ impl Inner {
 
     /// Deletes what a failed or cancelled sign-in created.
     async fn discard_sign_in(&self, rc: &RcClient, kind: &SignInKind, remote_name: &str) {
-        if let SignInKind::Add(account) = kind {
+        if let SignInKind::Add { account, .. } = kind {
             if let Err(e) = rc.config_delete(remote_name).await {
                 tracing::warn!(remote = remote_name, error = %e, "cannot delete the remote");
             }
@@ -254,7 +257,7 @@ impl Inner {
         tracing::info!(remote = %pending.remote_name, "signed in");
 
         match pending.kind {
-            SignInKind::Add(account) => {
+            SignInKind::Add { account, mount } => {
                 let mut st = self.state.lock().await;
                 let taken = st.config.accounts.iter().any(|r| {
                     r.account
@@ -268,7 +271,7 @@ impl Inner {
                         account.display_name
                     )));
                 }
-                self.finish_add(&mut st, &rc, account).await
+                self.finish_add(&mut st, &rc, account, mount).await
             }
             SignInKind::Reconnect(id) => self.finish_reconnect(&id).await,
         }

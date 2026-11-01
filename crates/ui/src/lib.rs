@@ -1,10 +1,18 @@
-//! GTK4 + libadwaita user interface: onboarding, main window, browser,
-//! preferences.
+//! GTK 4 + libadwaita user interface: setup, main window, and (later) the
+//! file browser and preferences.
 //!
-//! **Skeleton**: only an empty main window for now. Every user-visible
-//! string goes through gettext.
+//! The interface is a client of `nuaged` ([`Backend`]); it holds no state
+//! of its own beyond what it shows. Every user-visible string goes through
+//! gettext.
+
+mod backend;
+pub mod onboarding;
+mod window;
 
 use gettextrs::gettext;
+
+pub use backend::{Backend, BackendEvent, glib_sleep, log_file};
+pub use window::{Ui, human_size, open_folder, state_icon, state_text};
 
 /// gettext domain of the application.
 pub const GETTEXT_PACKAGE: &str = "nuage";
@@ -19,23 +27,16 @@ pub fn init_i18n(locale_dir: &str) {
     let _ = gettextrs::textdomain(GETTEXT_PACKAGE);
 }
 
-/// Builds the (still empty) main window.
-pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
-    let page = adw::StatusPage::builder()
-        .icon_name("folder-remote-symbolic")
-        .title(gettext("No Accounts"))
-        .description(gettext("Nuage is under construction."))
+/// The "About" dialog.
+pub fn show_about(parent: &impl gtk::prelude::IsA<gtk::Widget>) {
+    let about = adw::AboutDialog::builder()
+        .application_name("Nuage")
+        .application_icon(nuage_core::APP_ID)
+        .version(nuage_core::VERSION)
+        .comments(gettext("Your cloud storage as a regular folder."))
+        .website("https://github.com/felixilgatto/nuage")
+        .issue_url("https://github.com/felixilgatto/nuage/issues")
+        .license_type(gtk::License::MitX11)
         .build();
-
-    let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&adw::HeaderBar::new());
-    toolbar.set_content(Some(&page));
-
-    adw::ApplicationWindow::builder()
-        .application(app)
-        .title("Nuage")
-        .default_width(640)
-        .default_height(480)
-        .content(&toolbar)
-        .build()
+    adw::prelude::AdwDialogExt::present(&about, Some(parent));
 }

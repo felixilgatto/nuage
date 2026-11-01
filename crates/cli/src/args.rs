@@ -116,6 +116,12 @@ pub enum AccountCommand {
     List,
     /// Rename an account.
     Rename { account: String, name: String },
+    /// Mount an account at another folder.
+    Move {
+        account: String,
+        /// The new folder (empty or missing).
+        folder: PathBuf,
+    },
     /// Sign in again after a token expired or was revoked.
     Reconnect {
         account: String,
@@ -246,6 +252,7 @@ impl Commands {
                 AccountCommand::Add(_) => "account add",
                 AccountCommand::List => "account list",
                 AccountCommand::Rename { .. } => "account rename",
+                AccountCommand::Move { .. } => "account move",
                 AccountCommand::Reconnect { .. } => "account reconnect",
                 AccountCommand::Remove { .. } => "account remove",
             },
@@ -304,6 +311,7 @@ mod tests {
             "nuage account add local --param root=/srv --param x=",
             "nuage account list",
             "nuage account rename Drive Work",
+            "nuage account move Drive /tmp/d2",
             "nuage account reconnect Drive",
             "nuage account reconnect Drive --token-file t.json",
             "nuage account reconnect Drive --no-browser",

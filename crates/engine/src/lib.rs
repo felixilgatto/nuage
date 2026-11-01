@@ -320,6 +320,20 @@ impl Engine {
             Command::AccountReconnect { account, token } => {
                 inner.reconnect_account(&account, token).await
             }
+            Command::AccountSetMountPoint {
+                account,
+                mount_point,
+            } => inner
+                .set_mount_point(&account, &mount_point)
+                .await
+                .map(Reply::Account),
+            Command::ValidateMountPoint {
+                account,
+                mount_point,
+            } => inner
+                .validate_mount_point(account.as_ref(), &mount_point)
+                .await
+                .map(|_| Reply::Done),
             Command::SignInWait { session } => {
                 inner.wait_sign_in(&session).await.map(Reply::Account)
             }

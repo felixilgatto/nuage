@@ -10,6 +10,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+gettext-rs.workspace = true
 ksni.workspace = true
 nuage-core.workspace = true
 

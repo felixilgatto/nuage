@@ -11,9 +11,14 @@ publish.workspace = true
 
 [dependencies]
 adw.workspace = true
+ashpd = { workspace = true, features = ["tokio"] }
+async-channel.workspace = true
 gettext-rs.workspace = true
 gtk.workspace = true
 nuage-core.workspace = true
+nuage-ipc.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
 
 [lints]
 workspace = true

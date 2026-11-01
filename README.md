@@ -7,7 +7,8 @@
 
 > **Status: early development.** The daemon and the command-line tool mount
 > Google Drive and local folders, pause and resume uploads and report the
-> sync state. The desktop app is not ready yet.
+> sync state. The desktop app (setup, accounts, tray icon) works from a
+> source build; there is no Flatpak bundle yet.
 > Sections marked *(planned)* describe the intended behaviour.
 
 <!-- TODO: screenshot -->
@@ -156,10 +157,13 @@ flatpak run --command="$PWD/target/flatpak-sdk/debug/nuage-gtk" \
 
 The Flatpak manifest (`flatpak-builder`) comes later.
 
-## First launch *(planned)*
+## First launch
 
-Pick a provider, sign in, choose the folder: three screens. Google Drive
-first asks you to create your own OAuth client (see below).
+Pick a provider, sign in in your browser, choose the folder: three screens.
+For your first Google account, a screen in between guides you through
+creating your own OAuth client (see below). Then Nuage lives in the system
+tray: on Ubuntu, make sure the "Ubuntu AppIndicators" extension is enabled
+(Extensions app); without it, Nuage keeps its window open instead.
 
 ## Create your own Google OAuth client
 

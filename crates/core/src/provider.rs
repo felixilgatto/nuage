@@ -61,6 +61,19 @@ pub struct CredentialField {
     /// The value is a secret and must never be logged or displayed.
     pub secret: bool,
     pub required: bool,
+    /// The value is a folder of this computer (the interface offers a
+    /// folder chooser).
+    #[serde(default)]
+    pub folder: bool,
+}
+
+/// One step of the guide to create an OAuth client, with the page where it
+/// is done.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuideStep {
+    /// What to do (English, translated by the interface).
+    pub title: String,
+    pub url: String,
 }
 
 /// What the user provided when adding an account.

@@ -132,13 +132,17 @@ impl Inner {
             None => unique_name(provider.display_name(), &taken),
         };
         let others: Vec<&Account> = st.config.accounts.iter().map(|r| &r.account).collect();
-        let mount_point = validate_mount_point(
-            &args
-                .mount_point
-                .unwrap_or_else(|| self.paths.default_mount_point(&name)),
-            &self.paths,
-            &others,
-        )?;
+        let requested = args
+            .mount_point
+            .clone()
+            .unwrap_or_else(|| self.paths.default_mount_point(&name));
+        // Without mounting now (desktop setup), the folder is chosen and
+        // checked at the last screen.
+        let mount_point = if args.no_mount {
+            crate::mounts::normalize(&requested)
+        } else {
+            validate_mount_point(&requested, &self.paths, &others)?
+        };
 
         let mut input = SetupInput {
             name: name.clone(),
@@ -250,16 +254,23 @@ impl Inner {
             mount_point,
             cache_limit: st.config.settings.default_cache_limit,
         };
+        let mount = !args.no_mount;
         if sign_in {
             drop(st);
             let state = outcome.map(|o| o.state).unwrap_or_default();
             let answers = config_answers(&parameters);
             let sign_in = self
-                .start_sign_in(&rc, &remote_name, &state, SignInKind::Add(account), answers)
+                .start_sign_in(
+                    &rc,
+                    &remote_name,
+                    &state,
+                    SignInKind::Add { account, mount },
+                    answers,
+                )
                 .await?;
             return Ok(Reply::SignIn(sign_in));
         }
-        self.finish_add(&mut st, &rc, account)
+        self.finish_add(&mut st, &rc, account, mount)
             .await
             .map(Reply::Account)
     }
@@ -271,18 +282,19 @@ impl Inner {
         st: &mut State,
         rc: &RcClient,
         account: Account,
+        mount: bool,
     ) -> Result<Account> {
         st.config.accounts.push(AccountRecord {
             account: account.clone(),
             paused: false,
-            auto_mount: true,
+            auto_mount: mount,
             default_exclusions: true,
             exclusions: Vec::new(),
         });
         let i = st.config.accounts.len() - 1;
         let mounted = match self.save(st) {
-            Ok(()) => self.mount_locked(st, i).await,
-            Err(e) => Err(e),
+            Ok(()) if mount => self.mount_locked(st, i).await,
+            other => other,
         };
         if let Err(e) = mounted {
             st.config.accounts.pop();
@@ -297,6 +309,62 @@ impl Inner {
         }
         tracing::info!(account = %account.display_name, provider = %account.provider_id, "account added");
         self.emit(Event::AccountAdded {
+            account: account.clone(),
+        });
+        Ok(account)
+    }
+
+    /// Checks a folder for an account (`for_account`: the account that
+    /// would move there, which may keep its own folder).
+    pub(crate) async fn validate_mount_point(
+        &self,
+        for_account: Option<&AccountId>,
+        path: &std::path::Path,
+    ) -> Result<std::path::PathBuf> {
+        let st = self.state.lock().await;
+        let own = for_account.map(|id| st.resolve(id)).transpose()?;
+        // An account's own folder, where it is mounted, is fine.
+        if let Some(i) = own
+            && st.record(i).account.mount_point == crate::mounts::normalize(path)
+            && st.is_mounted(&st.record(i).account.id)
+        {
+            return Ok(st.record(i).account.mount_point.clone());
+        }
+        let others: Vec<&Account> = st
+            .config
+            .accounts
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| Some(*j) != own)
+            .map(|(_, r)| &r.account)
+            .collect();
+        validate_mount_point(path, &self.paths, &others)
+    }
+
+    /// Moves an account to another folder.
+    pub(crate) async fn set_mount_point(
+        &self,
+        id: &AccountId,
+        path: &std::path::Path,
+    ) -> Result<Account> {
+        let path = self.validate_mount_point(Some(id), path).await?;
+        let mut st = self.state.lock().await;
+        let i = st.resolve(id)?;
+        let account = st.record(i).account.clone();
+        if account.mount_point == path {
+            return Ok(account);
+        }
+        self.unmount_locked(&mut st, &account).await?;
+        // Only removed if empty: never delete user files.
+        let _ = std::fs::remove_dir(&account.mount_point);
+        st.config.accounts[i].account.mount_point = path;
+        self.save(&st)?;
+        if st.record(i).auto_mount {
+            self.mount_locked(&mut st, i).await?;
+        }
+        let account = st.record(i).account.clone();
+        tracing::info!(account = %account.display_name, at = %account.mount_point.display(), "moved");
+        self.emit(Event::AccountUpdated {
             account: account.clone(),
         });
         Ok(account)

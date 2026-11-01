@@ -262,6 +262,37 @@ and are queued again at the next mount.
 | VFS cache | `~/.cache/nuage/rclone/` | `cache/rclone/` |
 | `rcd.pid`, hidden mounts | `~/.local/share/nuage/` | `data/` |
 
+## Desktop application
+
+`nuage-gtk` (crates `gtk`, `ui`, `tray`) is a client of `nuaged` like the
+CLI; it starts the daemon if it does not answer (next to its executable,
+then `PATH`; log in the user data folder) and never stops it on close.
+
+- `nuage_ui::Backend`: a thread with a tokio runtime runs the IPC client;
+  the GTK code awaits its answers through `async-channel`, and receives the
+  daemon's events (reconnecting when it restarts).
+- Setup (`ui/onboarding.rs`), one window, at most four screens: provider →
+  the user's OAuth client (only if the provider requires one and no account
+  of it exists) → sign-in in the browser (or the credentials form) → folder
+  and "Start automatically at login" (first account) → "Start Sync". The
+  account is created with `no_mount`, the folder checked with
+  `ValidateMountPoint`, moved with `AccountSetMountPoint`, then mounted.
+  Nothing provider-specific is in the interface: the client guide, the client
+  ID format and the form come from `ProviderInfo`.
+- Main window: accounts with state, quota and "Open folder"; "+"; menu
+  (About, Quit). Closing it hides it.
+- Tray (`ksni`, StatusNotifierItem): aggregated state icon; menu with each
+  account's state, quota and cache, Open Nuage, Open Folder, Refresh,
+  Pause/Resume Uploads, Add Account, Quit. Without a StatusNotifierWatcher
+  (GNOME without the AppIndicator extension), the window is shown instead
+  and closing it quits the application (the daemon keeps running).
+- Start at login: Background portal (`nuage-gtk --background`), asked at the
+  last setup screen of the first account.
+- Quit: `DaemonStop` with the "quit with pending uploads" setting; with
+  "ask", a dialog offers Wait / Quit Now.
+- Targets GTK 4.14 and libadwaita 1.5 (Ubuntu 24.04, CI); the GNOME 51
+  runtime is newer.
+
 ## Native packages
 
 `scripts/build-native.sh` builds `nuaged` and `nuage` for

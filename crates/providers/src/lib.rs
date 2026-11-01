@@ -19,7 +19,9 @@ mod registry;
 
 pub use registry::ProviderRegistry;
 
-use nuage_core::{AuthSpec, Capabilities, NativeDocPolicy, ProviderInfo, SetupInput, VfsOptions};
+use nuage_core::{
+    AuthSpec, Capabilities, GuideStep, NativeDocPolicy, ProviderInfo, SetupInput, VfsOptions,
+};
 
 /// A storage provider (Google Drive, OneDrive, local…).
 pub trait Provider: Send + Sync {
@@ -43,6 +45,17 @@ pub trait Provider: Send + Sync {
     /// How provider-native documents (Google Docs…) are exposed, if any.
     fn native_docs(&self) -> Option<NativeDocPolicy>;
 
+    /// Steps to create the user's own OAuth client, for providers that
+    /// need one.
+    fn client_guide(&self) -> Vec<GuideStep> {
+        Vec::new()
+    }
+
+    /// The end of a valid client ID, to check what the user pastes.
+    fn client_id_suffix(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Checks what the user provided before anything is created. The error
     /// is shown to the user and says what to fix.
     fn validate(&self, _input: &SetupInput) -> Result<(), String> {
@@ -51,11 +64,22 @@ pub trait Provider: Send + Sync {
 
     /// Description sent to clients, which do not link this crate.
     fn info(&self) -> ProviderInfo {
+        let auth = self.auth();
         ProviderInfo {
             id: self.id().to_owned(),
             display_name: self.display_name().to_owned(),
             icon_name: self.icon_name().to_owned(),
-            auth: self.auth().kind(),
+            auth: auth.kind(),
+            oauth_client: match &auth {
+                AuthSpec::OAuthBrowser { custom_client } => Some(*custom_client),
+                _ => None,
+            },
+            credentials: match auth {
+                AuthSpec::Credentials { fields } => fields,
+                _ => Vec::new(),
+            },
+            client_guide: self.client_guide(),
+            client_id_suffix: self.client_id_suffix().map(str::to_owned),
             capabilities: self.static_capabilities(),
         }
     }

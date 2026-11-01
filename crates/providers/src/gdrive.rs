@@ -3,7 +3,9 @@
 //! **Declarative stub**: the values below follow the project brief; the
 //! OAuth flows are completed in milestone 4.
 
-use nuage_core::{AuthSpec, Capabilities, CustomClient, NativeDocPolicy, SetupInput, VfsOptions};
+use nuage_core::{
+    AuthSpec, Capabilities, CustomClient, GuideStep, NativeDocPolicy, SetupInput, VfsOptions,
+};
 
 use crate::Provider;
 
@@ -78,6 +80,40 @@ impl Provider for GoogleDrive {
             poll_interval_secs: Some(60),
             ..VfsOptions::default()
         }
+    }
+
+    fn client_guide(&self) -> Vec<GuideStep> {
+        let step = |title: &str, url: &str| GuideStep {
+            title: title.to_owned(),
+            url: url.to_owned(),
+        };
+        // Same steps as the README ("Create your own Google OAuth client").
+        vec![
+            step(
+                "Create a project in the Google Cloud console",
+                "https://console.cloud.google.com/projectcreate",
+            ),
+            step(
+                "Enable the Google Drive API",
+                "https://console.cloud.google.com/apis/library/drive.googleapis.com",
+            ),
+            step(
+                "Describe the app: a name, your e-mail address, audience External",
+                "https://console.cloud.google.com/auth/branding",
+            ),
+            step(
+                "Publish the app, or Google asks you to sign in every week",
+                "https://console.cloud.google.com/auth/audience",
+            ),
+            step(
+                "Create a client of type Desktop app, then copy its ID and secret below",
+                "https://console.cloud.google.com/auth/clients",
+            ),
+        ]
+    }
+
+    fn client_id_suffix(&self) -> Option<&'static str> {
+        Some(".apps.googleusercontent.com")
     }
 
     fn native_docs(&self) -> Option<NativeDocPolicy> {

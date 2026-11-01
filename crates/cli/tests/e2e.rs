@@ -821,3 +821,31 @@ fn exclusions() {
         "nothing deleted in the cloud"
     );
 }
+
+#[test]
+fn moving_an_account() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let (src, mount) = env.add_local("Mover");
+    std::fs::write(src.join("a.txt"), "a").unwrap();
+    let new_folder = env.path("home/Elsewhere/Mover");
+    let moved = env.json(&["account", "move", "Mover", new_folder.to_str().unwrap()]);
+    assert_eq!(moved["mount_point"], new_folder.to_str().unwrap());
+    assert!(!fuse_mounted(&mount));
+    assert!(!mount.exists(), "the old empty folder is removed");
+    assert!(fuse_mounted(&new_folder));
+    assert_eq!(
+        std::fs::read_to_string(new_folder.join("a.txt")).unwrap(),
+        "a"
+    );
+
+    // A folder that is not empty is refused, and nothing changes.
+    let full = env.path("home/full");
+    std::fs::create_dir_all(&full).unwrap();
+    std::fs::write(full.join("x"), "x").unwrap();
+    assert_eq!(
+        env.json_error(&["account", "move", "Mover", full.to_str().unwrap()], 2),
+        "invalid_argument"
+    );
+    assert!(fuse_mounted(&new_folder));
+}

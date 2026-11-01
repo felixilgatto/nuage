@@ -30,8 +30,8 @@ pub use event::Event;
 pub use exclusion::{DEFAULT_PATTERNS, Exclusion, ExclusionRule, ExclusionSet};
 pub use pin::{Pin, PinKind, PinState};
 pub use provider::{
-    AuthKind, AuthSpec, CacheMode, CredentialField, CustomClient, NativeDocPolicy, SetupInput,
-    VfsOptions,
+    AuthKind, AuthSpec, CacheMode, CredentialField, CustomClient, GuideStep, NativeDocPolicy,
+    SetupInput, VfsOptions,
 };
 pub use quota::Quota;
 pub use state::SyncState;
