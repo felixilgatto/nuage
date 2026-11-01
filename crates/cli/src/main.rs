@@ -12,7 +12,7 @@ use clap::Parser;
 use serde_json::json;
 
 use nuage_core::{
-    AccountAddArgs, AccountId, Command, Event, ExclusionRule, Quota, RemotePath, Reply,
+    AccountAddArgs, AccountId, Badge, Command, Event, ExclusionRule, Quota, RemotePath, Reply,
     StatusReport, SyncState,
 };
 use nuage_ipc::{Client, IpcError};
@@ -110,6 +110,116 @@ fn done(cli: &Cli, message: &str) {
     } else {
         println!("{message}");
     }
+}
+
+/// Parses `<account>:<path>`.
+fn remote(s: &str) -> Result<RemotePath, Failure> {
+    RemotePath::parse(s).ok_or_else(|| {
+        usage(format!(
+            "\"{s}\" is not a remote path. Write <account>:<path>, e.g. \"Google Drive:Documents\" (\"Google Drive:\" for the root)."
+        ))
+    })
+}
+
+/// `Google Drive:Documents`, as the user writes it.
+fn show(path: &RemotePath) -> String {
+    format!("\"{}:{}\"", path.account.as_str(), path.path)
+}
+
+/// The daemon may run in another directory: send absolute paths.
+fn absolute(path: &std::path::Path) -> Result<std::path::PathBuf, Failure> {
+    std::path::absolute(path)
+        .map_err(|e| usage(format!("\"{}\" is not a valid path: {e}", path.display())))
+}
+
+async fn ls(cli: &Cli, path: &RemotePath) -> Result<(), Failure> {
+    let Reply::Entries(entries) = request(cli, Command::List { path: path.clone() }).await? else {
+        return Err(unexpected());
+    };
+    if cli.json {
+        print_json(&entries);
+        return Ok(());
+    }
+    for e in &entries {
+        let size = e.size.map_or_else(|| "-".to_owned(), human_size);
+        let date = e
+            .modified
+            .map(|d| {
+                d.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let mut name = e.name.clone();
+        if e.is_dir() {
+            name.push('/');
+        }
+        let mut notes: Vec<&str> = Vec::new();
+        if e.native_doc.is_some() {
+            notes.push("web document");
+        }
+        for badge in &e.badges {
+            notes.push(match badge {
+                Badge::Uploading => "uploading",
+                Badge::NotSynced => "not synced",
+                Badge::OnlineOnly => "online only",
+            });
+        }
+        let notes = if notes.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", notes.join(", "))
+        };
+        println!("{size:>9}  {date:16}  {name}{notes}");
+    }
+    Ok(())
+}
+
+async fn rm(cli: &Cli, path: &RemotePath, recursive: bool, yes: bool) -> Result<(), Failure> {
+    // Without a trash, a deletion cannot be undone: it needs --yes.
+    let trash = trash_of(cli, &path.account).await?;
+    if !trash && !yes {
+        return Err(usage(format!(
+            "{} is deleted for good (this account has no trash). Confirm with --yes.",
+            show(path)
+        )));
+    }
+    request(
+        cli,
+        Command::Delete {
+            path: path.clone(),
+            recursive,
+        },
+    )
+    .await?;
+    let where_to = if trash {
+        " It is in the account's trash."
+    } else {
+        ""
+    };
+    done(cli, &format!("Deleted {}.{where_to}", show(path)));
+    Ok(())
+}
+
+/// Whether deleted items of the account go to a trash.
+async fn trash_of(cli: &Cli, id: &AccountId) -> Result<bool, Failure> {
+    let Reply::Accounts(accounts) = request(cli, Command::AccountList).await? else {
+        return Err(unexpected());
+    };
+    let Some(account) = accounts
+        .iter()
+        .find(|a| &a.id == id || a.display_name == id.as_str())
+    else {
+        // The daemon answers that the account does not exist.
+        return Ok(true);
+    };
+    let Reply::Providers(providers) = request(cli, Command::ListProviders).await? else {
+        return Err(unexpected());
+    };
+    Ok(providers
+        .iter()
+        .find(|p| p.id == account.provider_id)
+        .is_some_and(|p| p.capabilities.trash))
 }
 
 fn account(name: &str) -> AccountId {
@@ -236,7 +346,102 @@ async fn run(cli: &Cli) -> Result<(), Failure> {
             Ok(())
         }
         Commands::Exclude(command) => exclude_command(cli, command).await,
-        other => Err(not_implemented(other.name())),
+        Commands::Ls { path } => ls(cli, &remote(path)?).await,
+        Commands::Mkdir { path } => {
+            let path = remote(path)?;
+            request(cli, Command::Mkdir { path: path.clone() }).await?;
+            done(cli, &format!("Created {}.", show(&path)));
+            Ok(())
+        }
+        Commands::Mv {
+            source,
+            destination,
+        } => {
+            let (from, to) = (remote(source)?, remote(destination)?);
+            request(
+                cli,
+                Command::Move {
+                    from: from.clone(),
+                    to: to.clone(),
+                },
+            )
+            .await?;
+            done(cli, &format!("Moved {} to {}.", show(&from), show(&to)));
+            Ok(())
+        }
+        Commands::Cp {
+            source,
+            destination,
+        } => {
+            let (from, to) = (remote(source)?, remote(destination)?);
+            request(
+                cli,
+                Command::Copy {
+                    from: from.clone(),
+                    to: to.clone(),
+                },
+            )
+            .await?;
+            done(cli, &format!("Copied {} to {}.", show(&from), show(&to)));
+            Ok(())
+        }
+        Commands::Rm {
+            path,
+            recursive,
+            yes,
+        } => rm(cli, &remote(path)?, *recursive, *yes).await,
+        Commands::Upload { local, destination } => {
+            let to = remote(destination)?;
+            for file in local {
+                let file = absolute(file)?;
+                request(
+                    cli,
+                    Command::Upload {
+                        local: file.clone(),
+                        to: to.clone(),
+                    },
+                )
+                .await?;
+                if !cli.json {
+                    println!("Uploaded {} to {}.", file.display(), show(&to));
+                }
+            }
+            if cli.json {
+                print_json(&json!({ "ok": true }));
+            }
+            Ok(())
+        }
+        Commands::Download { source, local } => {
+            let from = remote(source)?;
+            let local = absolute(local)?;
+            request(
+                cli,
+                Command::Download {
+                    from: from.clone(),
+                    local: local.clone(),
+                },
+            )
+            .await?;
+            done(
+                cli,
+                &format!("Downloaded {} to {}.", show(&from), local.display()),
+            );
+            Ok(())
+        }
+        // v1.1.
+        other @ Commands::Pin(_) => Err(not_implemented(other.name())),
+        Commands::Link { path } => {
+            let path = remote(path)?;
+            let Reply::Link(url) = request(cli, Command::PublicLink { path }).await? else {
+                return Err(unexpected());
+            };
+            if cli.json {
+                print_json(&json!({ "url": url }));
+            } else {
+                println!("{url}");
+            }
+            Ok(())
+        }
     }
 }
 

@@ -289,9 +289,34 @@ Every command accepts `--json`. Exit codes:
 | 4 | authentication required |
 
 Working so far: `status [--watch]`, `account add | list | rename | reconnect
-| remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, `exclude add |
-remove | list`, `config get | set` and `daemon status | stop`. File commands
-(`ls`, `cp`…) and pins answer "not implemented yet" (exit code 1).
+| remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, the file
+commands below, `exclude add | remove | list`, `config get | set` and
+`daemon status | stop`. Pins (v1.1) answer "not implemented yet" (exit
+code 1).
+
+### Files
+
+Remote paths are written `<account>:<path>` (`"Google Drive:"` is the
+root). They work even when the account is not mounted.
+
+```sh
+nuage ls "Google Drive:Documents"
+nuage mkdir "Google Drive:Documents/2026"
+nuage mv "Google Drive:Documents/draft.odt" "Google Drive:Documents/2026"   # into a folder
+nuage mv "Google Drive:Documents/a.odt" "Google Drive:Documents/b.odt"      # rename
+nuage cp "Google Drive:Photos" "Other Account:Backup"                      # across accounts
+nuage upload report.pdf photos/ "Google Drive:Documents"
+nuage download "Google Drive:Documents/2026" ~/Downloads
+nuage link "Google Drive:Documents/report.pdf"                             # share link
+nuage rm "Google Drive:Documents/old.odt"
+nuage rm --recursive "Google Drive:Documents/old"
+```
+
+`rm` sends items to the account's trash when it has one; otherwise the
+deletion cannot be undone and needs `--yes`. Existing files are never
+overwritten by `mv` and `cp`. In `ls`, Google Docs show as
+`[web document]`, excluded items as `[not synced]`, files still uploading
+as `[uploading]`.
 
 ### Exclusions
 

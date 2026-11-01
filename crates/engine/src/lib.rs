@@ -9,7 +9,7 @@
 //!  ├─ status            polls vfs/stats and operations/about, publishes events
 //!  ├─ settings          `nuage config get/set`
 //!  ├─ exclusions        per-account rules → rclone filters + local-only in nuage-fs
-//!  ├─ FileService       list, mkdir, move, copy, delete, upload, download, link (milestone 9)
+//!  ├─ files             list, mkdir, move, copy, delete, upload, download, link
 //!  └─ PinManager        offline pinning (v1.1)
 //! ```
 //!
@@ -41,7 +41,6 @@ use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 
 pub use config::QuitBehavior;
-pub use files::FileService;
 pub use mounts::MountPlan;
 pub use paths::Paths;
 pub use pins::PinManager;
@@ -94,7 +93,6 @@ pub(crate) struct Inner {
     sign_in: Mutex<Option<signin::PendingSignIn>>,
     /// `rclone.conf` is encrypted with a password from the keyring.
     config_encrypted: std::sync::atomic::AtomicBool,
-    files: FileService,
     pins: PinManager,
 }
 
@@ -204,7 +202,6 @@ impl Engine {
                 background: std::sync::Mutex::new(None),
                 sign_in: Mutex::new(None),
                 config_encrypted: std::sync::atomic::AtomicBool::new(false),
-                files: FileService::default(),
                 pins: PinManager::default(),
             }),
         })
@@ -364,28 +361,23 @@ impl Engine {
             Command::ConfigSet { key, value } => {
                 inner.config_set(&key, &value).await.map(Reply::Config)
             }
-            Command::List { path } => inner.files.list(&path).await.map(Reply::Entries),
-            Command::Mkdir { path } => inner.files.mkdir(&path).await.map(|()| Reply::Done),
+            Command::List { path } => inner.list_files(&path).await.map(Reply::Entries),
+            Command::Mkdir { path } => inner.mkdir(&path).await.map(|()| Reply::Done),
             Command::Move { from, to } => {
-                inner.files.move_to(&from, &to).await.map(|()| Reply::Done)
+                inner.transfer(&from, &to, true).await.map(|()| Reply::Done)
             }
-            Command::Copy { from, to } => {
-                inner.files.copy_to(&from, &to).await.map(|()| Reply::Done)
-            }
-            Command::Delete { path, recursive } => inner
-                .files
-                .delete(&path, recursive)
+            Command::Copy { from, to } => inner
+                .transfer(&from, &to, false)
                 .await
                 .map(|()| Reply::Done),
-            Command::Upload { local, to } => {
-                inner.files.upload(&local, &to).await.map(|()| Reply::Done)
+            Command::Delete { path, recursive } => {
+                inner.delete(&path, recursive).await.map(|()| Reply::Done)
             }
-            Command::Download { from, local } => inner
-                .files
-                .download(&from, &local)
-                .await
-                .map(|()| Reply::Done),
-            Command::PublicLink { path } => inner.files.public_link(&path).await.map(Reply::Link),
+            Command::Upload { local, to } => inner.upload(&local, &to).await.map(|()| Reply::Done),
+            Command::Download { from, local } => {
+                inner.download(&from, &local).await.map(|()| Reply::Done)
+            }
+            Command::PublicLink { path } => inner.public_link(&path).await.map(Reply::Link),
             Command::ExcludeAdd {
                 account,
                 rule,

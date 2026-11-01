@@ -8,7 +8,7 @@ use adw::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
 
-use nuage_core::{AccountStatus, Command, ProviderInfo, Reply, StatusReport, SyncState};
+use nuage_core::{AccountId, AccountStatus, Command, ProviderInfo, Reply, StatusReport, SyncState};
 
 use crate::Backend;
 
@@ -30,6 +30,8 @@ pub(crate) struct UiState {
     pub(crate) providers: Vec<ProviderInfo>,
     /// The system tray shows the icon: the window can close after setup.
     pub(crate) tray: bool,
+    /// Created the first time it is opened.
+    pub(crate) browser: Option<Rc<crate::browser::Browser>>,
 }
 
 /// A short, human state line.
@@ -238,6 +240,21 @@ impl Ui {
             self.accounts_box.append(&group);
         }
         self.state.borrow_mut().report = Some(report);
+        let browser = self.state.borrow().browser.clone();
+        if let Some(browser) = browser {
+            browser.update_accounts();
+        }
+    }
+
+    /// Opens the file browser, at `account` if given.
+    pub fn open_browser(self: &Rc<Self>, account: Option<&AccountId>) {
+        let existing = self.state.borrow().browser.clone();
+        let browser = existing.unwrap_or_else(|| {
+            let b = crate::browser::Browser::new(self);
+            self.state.borrow_mut().browser = Some(Rc::clone(&b));
+            b
+        });
+        browser.present(account);
     }
 
     fn account_row(self: &Rc<Self>, status: &AccountStatus) -> adw::ActionRow {
@@ -291,7 +308,6 @@ impl Ui {
             let path: PathBuf = account.mount_point.clone();
             open.connect_clicked(move |_| open_folder(&window, &path));
             row.add_suffix(&open);
-            row.set_activatable_widget(Some(&open));
         } else {
             let mount = gtk::Button::builder()
                 .label(gettext("Mount"))
@@ -311,6 +327,13 @@ impl Ui {
             });
             row.add_suffix(&mount);
         }
+        // The browser opens from an account.
+        row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+        row.set_activatable(true);
+        row.set_tooltip_text(Some(&gettext("Browse Files")));
+        let ui = Rc::clone(self);
+        let id = account.id.clone();
+        row.connect_activated(move |_| ui.open_browser(Some(&id)));
         row
     }
 }

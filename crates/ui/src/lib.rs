@@ -1,11 +1,12 @@
-//! GTK 4 + libadwaita user interface: setup, main window, and (later) the
-//! file browser and preferences.
+//! GTK 4 + libadwaita user interface: setup, main window, file browser,
+//! and (later) the preferences.
 //!
 //! The interface is a client of `nuaged` ([`Backend`]); it holds no state
 //! of its own beyond what it shows. Every user-visible string goes through
 //! gettext.
 
 mod backend;
+pub mod browser;
 pub mod onboarding;
 mod window;
 

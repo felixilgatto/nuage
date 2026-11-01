@@ -849,3 +849,152 @@ fn moving_an_account() {
     );
     assert!(fuse_mounted(&new_folder));
 }
+
+#[test]
+fn file_operations() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let src = env.path("src-Files");
+    std::fs::create_dir_all(src.join("docs/sub")).unwrap();
+    std::fs::write(src.join("docs/a.txt"), "aaa").unwrap();
+    std::fs::write(src.join("docs/sub/b.txt"), "b").unwrap();
+    std::fs::write(src.join("notes.log"), "log").unwrap();
+    let (_, mount) = env.add_local("Files");
+    let (other_src, _) = env.add_local("Other");
+    // The mount lists the folders before the changes below: they must show
+    // without waiting for its directory cache to expire.
+    assert!(mount.join("docs/a.txt").exists());
+    assert!(mount.join("docs/sub").is_dir());
+
+    // ls: folders first, sizes, badges.
+    let list = env.json(&["ls", "Files:"]);
+    let names: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["docs", "notes.log"]);
+    let list = env.json(&["ls", "Files:docs"]);
+    assert_eq!(list[0]["name"], "sub");
+    assert_eq!(list[0]["kind"], "folder");
+    assert_eq!(list[1]["path"], "docs/a.txt");
+    assert_eq!(list[1]["size"], 3);
+    let out = env.nuage(&["ls", "Files:docs"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("sub/") && text.contains("a.txt"), "{text}");
+    assert_eq!(env.json_error(&["ls", "Files:nope"], 1), "not_found");
+    assert_eq!(env.json_error(&["ls", "Files"], 2), "usage");
+    env.json(&["exclude", "add", "Files", "--glob", "*.log"]);
+    let list = env.json(&["ls", "Files:"]);
+    assert_eq!(list[1]["badges"][0], "not_synced", "{list}");
+
+    // mkdir, then the mount shows it at once.
+    env.json(&["mkdir", "Files:new/deep"]);
+    assert!(src.join("new/deep").is_dir());
+    assert!(mount.join("new/deep").is_dir());
+    assert_eq!(env.json_error(&["mkdir", "Files:new"], 1), "already_exists");
+
+    // mv and cp: renames, into folders, folders, across accounts.
+    env.json(&["mv", "Files:docs/a.txt", "Files:docs/renamed.txt"]);
+    assert!(!src.join("docs/a.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(src.join("docs/renamed.txt")).unwrap(),
+        "aaa"
+    );
+    // Kernel caches of both FUSE layers last a second each.
+    env.wait_until("the mount shows the rename", Duration::from_secs(5), |_| {
+        mount.join("docs/renamed.txt").exists() && !mount.join("docs/a.txt").exists()
+    });
+    env.json(&["cp", "Files:docs/renamed.txt", "Files:new"]);
+    assert!(src.join("new/renamed.txt").exists() && src.join("docs/renamed.txt").exists());
+    env.json(&["mv", "Files:docs/sub", "Files:new"]);
+    assert!(src.join("new/sub/b.txt").exists() && !src.join("docs/sub").exists());
+    env.json(&["cp", "Files:new", "Other:copied"]);
+    assert!(other_src.join("copied/sub/b.txt").exists());
+    assert_eq!(
+        env.json_error(&["mv", "Files:new", "Files:new/deep"], 2),
+        "invalid_argument"
+    );
+    assert_eq!(
+        env.json_error(
+            &["cp", "Files:docs/renamed.txt", "Files:new/renamed.txt"],
+            1
+        ),
+        "already_exists"
+    );
+
+    // upload and download, files and folders.
+    let local = env.path("local");
+    std::fs::create_dir_all(local.join("dir")).unwrap();
+    std::fs::write(local.join("up.txt"), "up").unwrap();
+    std::fs::write(local.join("dir/in.txt"), "in").unwrap();
+    env.json(&[
+        "upload",
+        local.join("up.txt").to_str().unwrap(),
+        local.join("dir").to_str().unwrap(),
+        "Files:new",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(src.join("new/up.txt")).unwrap(),
+        "up"
+    );
+    assert_eq!(
+        std::fs::read_to_string(src.join("new/dir/in.txt")).unwrap(),
+        "in"
+    );
+    let down = env.path("down");
+    std::fs::create_dir_all(&down).unwrap();
+    env.json(&["download", "Files:new/sub", down.to_str().unwrap()]);
+    env.json(&[
+        "download",
+        "Files:docs/renamed.txt",
+        down.join("copy.txt").to_str().unwrap(),
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(down.join("sub/b.txt")).unwrap(),
+        "b"
+    );
+    assert_eq!(
+        std::fs::read_to_string(down.join("copy.txt")).unwrap(),
+        "aaa"
+    );
+
+    // rm: no trash on `local`, so --yes; folders need --recursive.
+    assert_eq!(env.json_error(&["rm", "Files:new/up.txt"], 2), "usage");
+    env.json(&["rm", "Files:new/up.txt", "--yes"]);
+    assert!(!src.join("new/up.txt").exists());
+    env.wait_until(
+        "the mount shows the deletion",
+        Duration::from_secs(5),
+        |_| !mount.join("new/up.txt").exists(),
+    );
+    assert_eq!(
+        env.json_error(&["rm", "Files:new", "--yes"], 2),
+        "invalid_argument"
+    );
+    env.json(&["rm", "Files:new/deep", "--yes"]);
+    env.json(&["rm", "Files:new", "--recursive", "--yes"]);
+    assert!(!src.join("new").exists());
+    assert_eq!(
+        env.json_error(&["rm", "Files:", "--recursive", "--yes"], 2),
+        "invalid_argument"
+    );
+
+    // No share links on `local`.
+    assert_eq!(
+        env.json_error(&["link", "Files:docs/renamed.txt"], 1),
+        "unsupported"
+    );
+
+    // Works unmounted too.
+    env.json(&["unmount", "Files"]);
+    env.json(&["mkdir", "Files:offline"]);
+    let list = env.json(&["ls", "Files:"]);
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "offline")
+    );
+}

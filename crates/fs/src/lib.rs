@@ -26,7 +26,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::thread::JoinHandle;
 
@@ -53,7 +53,12 @@ pub struct MountedFs {
     gate: Arc<Gate>,
     exclusions: Arc<RwLock<ExclusionSet>>,
     local_only: Option<PathBuf>,
+    /// fuse connection number, to abort the session if it does not end.
+    connection: Option<u32>,
 }
+
+/// How long the threads may take to stop once unmounted.
+const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl fmt::Debug for MountedFs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -138,8 +143,16 @@ pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Re
             return Err(e);
         }
     };
+    // The root is served now: its device names the fuse connection.
+    let connection = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&mount_point)
+            .ok()
+            .map(|m| fusermount::connection_of(m.dev()))
+    };
     Ok(MountedFs {
         session: Some(session),
+        connection,
         mount_point,
         backing: backing.to_owned(),
         gate,
@@ -187,7 +200,27 @@ impl MountedFs {
         // unmount up.
         self.gate.set(true);
         // Once unmounted, the kernel ends the session and the threads stop.
-        fusermount::unmount(&self.mount_point)?;
+        // A busy folder (open in Files, a shell inside it…) is detached
+        // instead, and the kernel would keep the session for as long as it
+        // is used: end it.
+        if fusermount::unmount(&self.mount_point)? == fusermount::Unmounted::Lazily
+            && let Some(connection) = self.connection
+            && let Err(e) = fusermount::abort(connection)
+        {
+            tracing::warn!(error = %e, "cannot end the FUSE session of a busy folder");
+        }
+        let deadline = Instant::now() + STOP_TIMEOUT;
+        while !session.is_finished() {
+            if Instant::now() > deadline {
+                // Never hang: the session ends with the process.
+                tracing::warn!(
+                    path = %self.mount_point.display(),
+                    "the folder is still in use; nuage-fs stops serving it when the daemon exits"
+                );
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         session
             .join()
             .map_err(|_| io::Error::other("the nuage-fs thread panicked"))?

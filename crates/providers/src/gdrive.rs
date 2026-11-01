@@ -53,7 +53,7 @@ impl Provider for GoogleDrive {
         }
         // Google Docs, Sheets, Slides… as web shortcuts that open in the
         // browser (rclone's export format `link.html`).
-        if let Some(NativeDocPolicy::WebShortcut { export_formats }) = self.native_docs() {
+        if let Some(NativeDocPolicy::WebShortcut { export_formats, .. }) = self.native_docs() {
             params.push(("export_formats".to_owned(), export_formats));
         }
         // v1 mounts "My Drive" only: do not ask about shared drives.
@@ -121,6 +121,8 @@ impl Provider for GoogleDrive {
         // opens in a text editor. The link files are read-only.
         Some(NativeDocPolicy::WebShortcut {
             export_formats: "link.html".to_owned(),
+            suffix: ".link.html".to_owned(),
+            web_url: Some("https://drive.google.com/open?id={id}".to_owned()),
         })
     }
 }

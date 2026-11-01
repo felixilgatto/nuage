@@ -66,8 +66,17 @@ pub fn mount(mount_point: &Path, options: &str) -> io::Result<OwnedFd> {
     }
 }
 
+/// How a mount went away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unmounted {
+    Now,
+    /// Busy: detached with `-z`. The kernel keeps the session until the
+    /// last process using the folder lets go of it.
+    Lazily,
+}
+
 /// Unmounts with `fusermount3 -u`, then `-u -z` (lazy) if it is busy.
-pub fn unmount(mount_point: &Path) -> io::Result<()> {
+pub fn unmount(mount_point: &Path) -> io::Result<Unmounted> {
     let bin = binary();
     let mut last = String::new();
     for lazy in [false, true] {
@@ -82,7 +91,11 @@ pub fn unmount(mount_point: &Path) -> io::Result<()> {
             .stdin(Stdio::null())
             .output()?;
         if output.status.success() {
-            return Ok(());
+            return Ok(if lazy {
+                Unmounted::Lazily
+            } else {
+                Unmounted::Now
+            });
         }
         last = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     }
@@ -121,4 +134,18 @@ fn receive_fd(socket: &OwnedFd) -> io::Result<Option<OwnedFd>> {
         }
     }
     Ok(None)
+}
+
+/// Ends a FUSE session at once, through the fuse control filesystem
+/// (`/sys/fs/fuse/connections/<id>/abort`, writable by the mount's owner).
+/// Processes still using a lazily unmounted folder then get errors instead
+/// of keeping the session alive. Best effort: it may be missing, e.g. in a
+/// sandbox.
+pub fn abort(connection: u32) -> io::Result<()> {
+    std::fs::write(format!("/sys/fs/fuse/connections/{connection}/abort"), "1")
+}
+
+/// The fuse connection number of a mount: the minor of its device.
+pub fn connection_of(dev: u64) -> u32 {
+    ((dev & 0xff) | ((dev >> 12) & 0xfff00)) as u32
 }

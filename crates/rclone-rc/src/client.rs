@@ -6,14 +6,16 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::types::{
-    About, ConfigJob, ConfigOutcome, ConfigStep, CoreVersion, FsInfo, MountInfo, MountRequest,
-    OAuthStatus, QueueItem, VfsStats,
+    About, ConfigJob, ConfigOutcome, ConfigStep, CoreVersion, FsInfo, JobStatus, ListItem,
+    MountInfo, MountRequest, OAuthStatus, QueueItem, VfsStats,
 };
 
 /// Timeout of calls that should answer quickly (stats, queue, version).
 const SHORT: Duration = Duration::from_secs(10);
 /// Timeout of calls that talk to the cloud provider.
 const LONG: Duration = Duration::from_secs(120);
+/// How often a running `_async` job is polled.
+const JOB_POLL: Duration = Duration::from_millis(250);
 
 /// Errors of the rc client.
 #[derive(Debug, thiserror::Error)]
@@ -341,6 +343,170 @@ impl RcClient {
         self.call::<_, IgnoredAny>("vfs/refresh", &json!({ "fs": fs }))
             .await
             .map(drop)
+    }
+}
+
+// Files. `fs` is a remote (`"name:"`) or a local folder (`"/home/me"`);
+// `remote` is a path inside it, without a leading slash.
+impl RcClient {
+    /// `operations/list` of one folder (not recursive).
+    pub async fn list(&self, fs: &str, remote: &str) -> Result<Vec<ListItem>, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            list: Vec<ListItem>,
+        }
+        let a: Answer = self
+            .call("operations/list", &json!({ "fs": fs, "remote": remote }))
+            .await?;
+        Ok(a.list)
+    }
+
+    /// `operations/stat`: `None` when nothing is at `remote`.
+    pub async fn stat(&self, fs: &str, remote: &str) -> Result<Option<ListItem>, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            item: Option<ListItem>,
+        }
+        let a: Answer = self
+            .call("operations/stat", &json!({ "fs": fs, "remote": remote }))
+            .await?;
+        Ok(a.item)
+    }
+
+    /// `operations/mkdir`.
+    pub async fn mkdir(&self, fs: &str, remote: &str) -> Result<(), RcError> {
+        self.call::<_, IgnoredAny>("operations/mkdir", &json!({ "fs": fs, "remote": remote }))
+            .await
+            .map(drop)
+    }
+
+    /// `operations/rmdir`: removes an empty folder.
+    pub async fn rmdir(&self, fs: &str, remote: &str) -> Result<(), RcError> {
+        self.call::<_, IgnoredAny>("operations/rmdir", &json!({ "fs": fs, "remote": remote }))
+            .await
+            .map(drop)
+    }
+
+    /// `operations/deletefile`.
+    pub async fn delete_file(&self, fs: &str, remote: &str) -> Result<(), RcError> {
+        self.job(
+            "operations/deletefile",
+            json!({ "fs": fs, "remote": remote }),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// `operations/purge`: removes a folder and everything in it.
+    pub async fn purge(&self, fs: &str, remote: &str) -> Result<(), RcError> {
+        self.job("operations/purge", json!({ "fs": fs, "remote": remote }))
+            .await
+            .map(drop)
+    }
+
+    /// `operations/copyfile` or `operations/movefile` (`moving`).
+    pub async fn transfer_file(
+        &self,
+        (src_fs, src): (&str, &str),
+        (dst_fs, dst): (&str, &str),
+        moving: bool,
+    ) -> Result<(), RcError> {
+        let method = if moving {
+            "operations/movefile"
+        } else {
+            "operations/copyfile"
+        };
+        let params = json!({
+            "srcFs": src_fs, "srcRemote": src, "dstFs": dst_fs, "dstRemote": dst,
+        });
+        self.job(method, params).await.map(drop)
+    }
+
+    /// `sync/copy` or `sync/move` (`moving`) of a whole folder; both fs
+    /// strings name folders (`"remote:a/b"`).
+    pub async fn transfer_dir(
+        &self,
+        src_fs: &str,
+        dst_fs: &str,
+        moving: bool,
+    ) -> Result<(), RcError> {
+        let (method, params) = if moving {
+            (
+                "sync/move",
+                json!({ "srcFs": src_fs, "dstFs": dst_fs, "deleteEmptySrcDirs": true,
+                        "createEmptySrcDirs": true }),
+            )
+        } else {
+            (
+                "sync/copy",
+                json!({ "srcFs": src_fs, "dstFs": dst_fs, "createEmptySrcDirs": true }),
+            )
+        };
+        self.job(method, params).await.map(drop)
+    }
+
+    /// `operations/publiclink`: a share link.
+    pub async fn public_link(&self, fs: &str, remote: &str) -> Result<String, RcError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            url: String,
+        }
+        let a: Answer = self
+            .call(
+                "operations/publiclink",
+                &json!({ "fs": fs, "remote": remote }),
+            )
+            .await?;
+        Ok(a.url)
+    }
+
+    /// `vfs/forget` of some folders of a mounted fs: the mount lists them
+    /// again from the provider. Paths are relative to the fs root.
+    pub async fn vfs_forget_dirs(&self, fs: &str, dirs: &[String]) -> Result<(), RcError> {
+        let mut params = serde_json::Map::new();
+        params.insert("fs".into(), fs.into());
+        for (i, p) in dirs.iter().enumerate() {
+            let key = if i == 0 {
+                "dir".to_owned()
+            } else {
+                format!("dir{i}")
+            };
+            params.insert(key, p.as_str().into());
+        }
+        self.call_with_timeout::<_, IgnoredAny>("vfs/forget", &Value::Object(params), SHORT)
+            .await
+            .map(drop)
+    }
+
+    /// Runs `method` as an `_async` job and waits for its end: transfers
+    /// can outlast any HTTP timeout.
+    pub async fn job(&self, method: &str, mut params: Value) -> Result<Value, RcError> {
+        #[derive(Deserialize)]
+        struct Started {
+            jobid: u64,
+        }
+        if let Value::Object(map) = &mut params {
+            map.insert("_async".into(), true.into());
+        }
+        let started: Started = self.call_with_timeout(method, &params, SHORT).await?;
+        loop {
+            let status: JobStatus = self
+                .call_with_timeout("job/status", &json!({ "jobid": started.jobid }), SHORT)
+                .await?;
+            if status.finished {
+                if status.success {
+                    return Ok(status.output.unwrap_or(Value::Null));
+                }
+                return Err(RcError::Api {
+                    method: method.to_owned(),
+                    status: 500,
+                    message: status.error,
+                });
+            }
+            tokio::time::sleep(JOB_POLL).await;
+        }
     }
 }
 

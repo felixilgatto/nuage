@@ -227,3 +227,41 @@ impl QueueItem {
         self.delay - self.expiry
     }
 }
+
+/// One item of `operations/list` or `operations/stat`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct ListItem {
+    /// Path relative to the listed fs.
+    #[serde(rename = "Path")]
+    pub path: String,
+    #[serde(rename = "Name")]
+    pub name: String,
+    /// `-1` when unknown.
+    #[serde(rename = "Size", default)]
+    pub size: i64,
+    #[serde(rename = "MimeType", default)]
+    pub mime_type: Option<String>,
+    #[serde(rename = "ModTime", default)]
+    pub mod_time: Option<String>,
+    #[serde(rename = "IsDir", default)]
+    pub is_dir: bool,
+    /// Backend ID, when the backend has them (Google Drive).
+    #[serde(rename = "ID", default)]
+    pub id: Option<String>,
+    #[serde(rename = "Hashes", default)]
+    pub hashes: BTreeMap<String, String>,
+}
+
+/// `job/status` of an `_async` job.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct JobStatus {
+    #[serde(default)]
+    pub finished: bool,
+    #[serde(default)]
+    pub success: bool,
+    /// Error of the job, empty if none.
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub output: Option<serde_json::Value>,
+}

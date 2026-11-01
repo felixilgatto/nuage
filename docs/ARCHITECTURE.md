@@ -5,11 +5,12 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 7. The daemon supervises rclone, signs in to Google
+> Status: milestone 9. The daemon supervises rclone, signs in to Google
 > Drive, mounts each account in two layers (`nuage-fs` over a hidden rclone
-> mount), applies exclusions, pauses uploads and reports the status; the
-> CLI drives all of it. File operations (milestone 9) and pinning (v1.1)
-> still return `not_implemented`.
+> mount), applies exclusions, pauses uploads, reports the status and runs
+> file operations; the CLI and the desktop application (setup, main window,
+> tray, file browser) drive all of it. Pinning (v1.1) still returns
+> `not_implemented`.
 
 ## Processes
 
@@ -121,6 +122,11 @@ data/mounts/<account id>        ← rclone (fuse.rclone), VFS cache, write-back
   as rclone does (`fuser` would open `/dev/fuse` directly, which the
   sandbox does not allow). The threads share one `/dev/fuse` descriptor for
   the same reason.
+- Unmounting a busy folder (open in Files, a shell inside it): `fusermount3
+  -u -z` detaches it, then the session is ended through
+  `/sys/fs/fuse/connections/<id>/abort`, and the engine waits at most 5 s
+  for the serving threads. Without it, the kernel would keep the session
+  (and the daemon's stop) waiting for the last user of the folder.
 - Orphans: a `SIGKILL`ed daemon leaves `fuse.nuage` and `fuse.rclone`
   mounts; the next start detaches them, except user folders it still serves.
 
@@ -253,6 +259,28 @@ and are queued again at the next mount.
 | uploads in progress or queued | `syncing { uploads, queued }` |
 | otherwise | `up_to_date` |
 
+### File operations
+
+`files.rs`: list, mkdir, move, copy, delete, upload, download and share link
+through the rc API (`operations/*`, `sync/copy|move`), **independently of the
+mount**: they work with the account unmounted. Transfers run as `_async`
+jobs polled with `job/status`, so no HTTP timeout cuts them.
+
+- Moving or copying onto an existing folder puts the item inside it; an
+  existing file is never overwritten (`already_exists`). Folders cannot go
+  inside themselves. Accounts can differ (rclone copies across remotes).
+- After a change, the parent folders are forgotten by the account's mount
+  (`vfs/forget dir=…`): the mounted folder shows the change within a second
+  or two (the kernel caches of both FUSE layers).
+- `Entry.badges`: `uploading` (from `vfs/queue`; for a folder, something in
+  it; files written but not uploaded yet are listed too), `not_synced`
+  (exclusion rules), `online_only` (offline: the folder is listed from the
+  mount's directory cache, files without a VFS cache copy cannot open).
+- Provider-native documents: `NativeDocPolicy::WebShortcut` declares the
+  shortcut suffix (`.link.html`) and the web URL template
+  (`https://drive.google.com/open?id={id}`, with the backend ID from
+  `operations/list`), so the engine stays generic.
+
 ### Files
 
 | Content | Native | Flatpak (`~/.var/app/<id>/`) |
@@ -280,7 +308,20 @@ then `PATH`; log in the user data folder) and never stops it on close.
   Nothing provider-specific is in the interface: the client guide, the client
   ID format and the form come from `ProviderInfo`.
 - Main window: accounts with state, quota and "Open folder"; "+"; menu
-  (About, Quit). Closing it hides it.
+  (About, Quit). Closing it hides it. Launched by the user, the application
+  opens it; `--background` (login) does not when the tray shows.
+- File browser (`ui/browser.rs`), opened from an account row, its own
+  window: `AdwNavigationSplitView` with the accounts (quota bars) and the
+  folder; breadcrumb, filter, new folder, upload, list (`GtkColumnView`,
+  sortable) or grid (`GtkGridView`) view, remembered in
+  `$XDG_CONFIG_HOME/nuage/browser.ini`. Context menus show only what the
+  account can do (`Capabilities`): open, show in Files, download to, copy
+  link, cut/copy/paste (also across accounts), rename, exclude/include,
+  move to trash or delete (confirmed without a trash), properties. Files
+  dropped from the file manager are uploaded. Opening: folders in the
+  browser, native documents in the web browser (`GtkUriLauncher`), files
+  from the mounted folder, or from a downloaded copy when unmounted or
+  excluded. A folder with uploads in progress is listed again every 3 s.
 - Tray (`ksni`, StatusNotifierItem): aggregated state icon; menu with each
   account's state, quota and cache, Open Nuage, Open Folder, Refresh,
   Pause/Resume Uploads, Add Account, Quit. Without a StatusNotifierWatcher

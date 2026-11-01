@@ -101,16 +101,23 @@ impl Backend {
 
     /// Sends a command to the daemon and waits for its reply.
     pub async fn call(&self, command: Command) -> Answer {
+        match self.request(command).await {
+            Ok(Ok(reply)) => Ok(reply),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// [`call`](Self::call), keeping the daemon's error (its code tells,
+    /// e.g., that a confirmation is needed). The outer error means that
+    /// the daemon could not be reached.
+    pub async fn request(&self, command: Command) -> Result<Result<Reply, Error>, String> {
         let sockets = self.sockets.clone();
         self.run(async move {
             let mut client = Client::connect_any(&sockets, &client_name())
                 .await
                 .map_err(message)?;
-            client
-                .request(command)
-                .await
-                .map_err(message)?
-                .map_err(|e: Error| e.to_string())
+            client.request(command).await.map_err(message)
         })
         .await
     }

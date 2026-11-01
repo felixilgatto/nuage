@@ -24,7 +24,7 @@ pub use command::{
     AccountAddArgs, AccountStatus, Command, ConfigEntry, DaemonInfo, ProviderInfo, Reply, SignIn,
     StatusReport,
 };
-pub use entry::{Entry, EntryKind, NativeDoc, NativeDocKind};
+pub use entry::{Badge, Entry, EntryKind, NativeDoc, NativeDocKind};
 pub use error::{Error, Result};
 pub use event::Event;
 pub use exclusion::{DEFAULT_PATTERNS, Exclusion, ExclusionRule, ExclusionSet};

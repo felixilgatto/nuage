@@ -138,6 +138,26 @@ fn mount_and_unmount() {
 }
 
 #[test]
+fn unmounts_a_busy_folder() {
+    let mut f = fixture!();
+    fs::write(f.b("open.txt"), "x").unwrap();
+    // Like a file manager showing the folder: it stays in use.
+    let held = File::open(f.m("open.txt")).unwrap();
+    let dir = File::open(&f.mnt).unwrap();
+    let started = Instant::now();
+    f.fs.take().unwrap().unmount().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "unmount must not wait for the folder to be released"
+    );
+    assert!(!is_mounted(&f.mnt));
+    // The session is over: the held file is unusable, not served forever.
+    let mut buf = String::new();
+    assert!((&held).read_to_string(&mut buf).is_err());
+    drop((held, dir));
+}
+
+#[test]
 fn read_write() {
     let f = fixture!();
     fs::write(f.b("existing.txt"), "from the backing folder").unwrap();

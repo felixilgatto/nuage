@@ -131,5 +131,55 @@ impl Default for VfsOptions {
 pub enum NativeDocPolicy {
     /// Exported as web shortcuts that open in the browser, using rclone's
     /// export formats (e.g. `"link.html"` or `"desktop"`).
-    WebShortcut { export_formats: String },
+    WebShortcut {
+        export_formats: String,
+        /// File name suffix of the shortcuts in listings (`".link.html"`).
+        suffix: String,
+        /// Link that opens a document, with `{id}` for its backend ID
+        /// (`"https://drive.google.com/open?id={id}"`).
+        web_url: Option<String>,
+    },
+}
+
+impl NativeDocPolicy {
+    /// The native document a listed file is, if it is one.
+    pub fn detect(&self, name: &str, id: Option<&str>) -> Option<crate::NativeDoc> {
+        let NativeDocPolicy::WebShortcut {
+            suffix, web_url, ..
+        } = self;
+        let title = name.strip_suffix(suffix.as_str())?;
+        if title.is_empty() {
+            return None;
+        }
+        Some(crate::NativeDoc {
+            title: title.to_owned(),
+            kind: crate::NativeDocKind::Other,
+            web_url: web_url
+                .as_ref()
+                .zip(id)
+                .map(|(url, id)| url.replace("{id}", id)),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_native_doc() {
+        let policy = NativeDocPolicy::WebShortcut {
+            export_formats: "link.html".into(),
+            suffix: ".link.html".into(),
+            web_url: Some("https://drive.google.com/open?id={id}".into()),
+        };
+        let doc = policy.detect("Budget.link.html", Some("abc")).unwrap();
+        assert_eq!(doc.title, "Budget");
+        assert_eq!(
+            doc.web_url.as_deref(),
+            Some("https://drive.google.com/open?id=abc")
+        );
+        assert!(policy.detect("page.html", Some("abc")).is_none());
+        assert!(policy.detect(".link.html", None).is_none());
+    }
 }

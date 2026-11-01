@@ -516,7 +516,7 @@ Objectif : **compte connecté et synchronisation lancée sans quitter la fenêtr
    - **« Start automatically at login »** (`AdwSwitchRow`), **activé par défaut**. Il déclenche la demande au portail Background ; si le portail refuse, l'interrupteur se désactive et un toast explique pourquoi. C'est un réglage global (pas par compte), affiché seulement lors de l'ajout du premier compte, modifiable ensuite dans les réglages.
    - Bouton principal **« Start sync »** (`suggested-action`) : crée le dossier si besoin et monte le compte. La fenêtre se ferme, l'application continue dans la barre système et envoie la notification « Google Drive is syncing to ~/Cloud/Google Drive » avec une action « Open folder ». **Si aucune barre système n'est disponible** (GNOME sans extension AppIndicator), la fenêtre affiche la fenêtre principale au lieu de se fermer.
 
-Aux lancements suivants, si au moins un compte existe, l'application démarre directement dans la barre système, fenêtre fermée.
+Aux lancements suivants, si au moins un compte existe, l'application lancée par l'utilisateur ouvre la fenêtre principale ; démarrée à la connexion (`--background`), elle reste dans la barre système, fenêtre fermée (décidé au jalon 8).
 
 ### Fenêtre principale
 
