@@ -23,6 +23,7 @@ use nuage_core::ExclusionSet;
 
 use crate::gate::Gate;
 use crate::inodes::{Inodes, ROOT};
+use crate::pins::{Listed, PinView};
 
 /// How long the kernel may cache attributes and names. Short, because the
 /// backing folder changes behind our back (remote changes seen by rclone).
@@ -82,11 +83,28 @@ struct SetAttr {
     mtime: Option<TimeOrNow>,
 }
 
+/// What `getattr` answers from.
+enum Stat {
+    Meta(fs::Metadata),
+    Attr(FileAttr),
+}
+
 #[derive(Debug)]
 struct DirItem {
     ino: u64,
     kind: FileType,
     name: std::ffi::OsString,
+}
+
+/// Where an item lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The hidden rclone mount.
+    Backing,
+    /// The local-only folder (excluded items).
+    Local,
+    /// The pin store (pinned items, v1.1).
+    Store,
 }
 
 /// The relay filesystem over `backing`.
@@ -96,6 +114,9 @@ pub struct RelayFs {
     /// Where excluded items created locally are kept (`local-only`).
     local: Option<PathBuf>,
     exclusions: Arc<RwLock<ExclusionSet>>,
+    /// Where pinned items are kept (`pins`); `None`: no pinning.
+    store: Option<PathBuf>,
+    pins: Arc<RwLock<PinView>>,
     inodes: Mutex<Inodes>,
     handles: Mutex<HashMap<u64, Arc<Handle>>>,
     next_fh: AtomicU64,
@@ -146,6 +167,36 @@ fn attr(ino: u64, m: &fs::Metadata) -> FileAttr {
         gid: m.gid(),
         rdev: m.rdev() as u32,
         blksize: m.blksize() as u32,
+        flags: 0,
+    }
+}
+
+/// Attributes of an item known from a saved listing (offline).
+fn listed_attr(ino: u64, listed: &Listed) -> FileAttr {
+    // Owned by the user running the daemon, like everything it serves.
+    let (uid, gid) = (
+        rustix::process::getuid().as_raw(),
+        rustix::process::getgid().as_raw(),
+    );
+    FileAttr {
+        ino: INodeNo(ino),
+        size: listed.size,
+        blocks: listed.size.div_ceil(512),
+        atime: listed.modified,
+        mtime: listed.modified,
+        ctime: listed.modified,
+        crtime: listed.modified,
+        kind: if listed.dir {
+            FileType::Directory
+        } else {
+            FileType::RegularFile
+        },
+        perm: if listed.dir { 0o755 } else { 0o644 },
+        nlink: if listed.dir { 2 } else { 1 },
+        uid,
+        gid,
+        rdev: 0,
+        blksize: 4096,
         flags: 0,
     }
 }
@@ -248,12 +299,16 @@ impl RelayFs {
         backing: PathBuf,
         local: Option<PathBuf>,
         exclusions: Arc<RwLock<ExclusionSet>>,
+        store: Option<PathBuf>,
+        pins: Arc<RwLock<PinView>>,
         gate: Arc<Gate>,
     ) -> Self {
         Self {
             backing,
             local,
             exclusions,
+            store,
+            pins,
             inodes: Mutex::new(Inodes::default()),
             handles: Mutex::new(HashMap::new()),
             next_fh: AtomicU64::new(1),
@@ -265,23 +320,29 @@ impl RelayFs {
         self.inodes.lock().expect("inode table lock")
     }
 
-    /// Waits for the backing folder; `EIO` if it does not come back.
+    /// Waits for the backing folder; `EIO` if it does not come back, and
+    /// `EHOSTUNREACH` at once while offline.
     fn ready(&self) -> Result<(), Errno> {
+        if self.gate.is_offline() {
+            return Err(Errno::EHOSTUNREACH);
+        }
         if self.gate.wait() {
             Ok(())
+        } else if self.gate.is_offline() {
+            Err(Errno::EHOSTUNREACH)
         } else {
             Err(Errno::EIO)
         }
     }
 
-    /// Runs `op` on the backing folder once it is available.
+    /// Runs `op`, which may use the backing folder (it waits for it through
+    /// [`path_of`](Self::path_of)).
     ///
     /// When rclone dies, its mount answers `ENOTCONN` or `ECONNABORTED`
     /// until the daemon notices (within a second), closes the gate and
     /// remounts. Such errors are retried until the gate's timeout instead
     /// of reaching the user.
     fn with_backing<T>(&self, mut op: impl FnMut() -> Result<T, Errno>) -> Result<T, Errno> {
-        self.ready()?;
         let deadline = Instant::now() + self.gate.timeout();
         loop {
             match op() {
@@ -308,30 +369,59 @@ impl RelayFs {
         self.local.is_some() && is_excluded(&self.exclusions, rel)
     }
 
-    /// Where `rel` lives: the local-only folder if it is excluded, else the
-    /// backing folder (the hidden rclone mount).
-    fn path_of(&self, rel: &Path) -> PathBuf {
-        match &self.local {
-            Some(local) if self.excluded(rel) => local.join(rel),
-            _ => self.backing.join(rel),
+    fn pins(&self) -> std::sync::RwLockReadGuard<'_, PinView> {
+        self.pins.read().expect("pins lock")
+    }
+
+    /// Where `rel` lives. A pinned item is in the store once its copy is
+    /// there (or, with `new`, when it is being created).
+    fn place(&self, rel: &Path, new: bool) -> Place {
+        if self.excluded(rel) {
+            return Place::Local;
+        }
+        if let Some(store) = &self.store
+            && self.pins().covers(rel)
+            && (new || fs::symlink_metadata(store.join(rel)).is_ok())
+        {
+            return Place::Store;
+        }
+        Place::Backing
+    }
+
+    fn root(&self, place: Place) -> &Path {
+        match place {
+            Place::Backing => &self.backing,
+            Place::Local => self.local.as_deref().expect("local-only folder"),
+            Place::Store => self.store.as_deref().expect("pin store"),
         }
     }
 
+    /// Where `rel` lives, as a full path; waits for the backing folder if
+    /// that is where.
+    fn path_of(&self, rel: &Path) -> Result<PathBuf, Errno> {
+        let place = self.place(rel, false);
+        if place == Place::Backing {
+            self.ready()?;
+        }
+        Ok(self.root(place).join(rel))
+    }
+
     /// Like [`path_of`](Self::path_of), for an item about to be created:
-    /// makes its folder exist in the local-only folder if needed.
-    fn path_for_new(&self, rel: &Path) -> Result<PathBuf, Errno> {
-        let path = self.path_of(rel);
-        if !path.starts_with(&self.backing)
-            && let Some(parent) = path.parent()
-        {
+    /// makes its folder exist in the local-only folder or the store.
+    fn path_for_new(&self, rel: &Path) -> Result<(Place, PathBuf), Errno> {
+        let place = self.place(rel, true);
+        let path = self.root(place).join(rel);
+        if place == Place::Backing {
+            self.ready()?;
+        } else if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(errno)?;
         }
-        Ok(path)
+        Ok((place, path))
     }
 
     /// Absolute path of an inode.
     fn real(&self, ino: INodeNo) -> Result<PathBuf, Errno> {
-        Ok(self.path_of(&self.rel(ino)?))
+        self.path_of(&self.rel(ino)?)
     }
 
     /// Relative path of `name` in directory `parent`.
@@ -342,11 +432,170 @@ impl RelayFs {
         Ok(self.rel(parent)?.join(name))
     }
 
+    /// Attributes of `rel`. Offline, items that are not pinned come from the
+    /// saved listings.
+    fn attr_of(&self, rel: &Path, ino: u64) -> Result<FileAttr, Errno> {
+        if self.pins().is_hidden(rel) {
+            return Err(Errno::ENOENT);
+        }
+        let place = self.place(rel, false);
+        if place != Place::Backing || !self.gate.is_offline() {
+            let meta = fs::symlink_metadata(self.path_of(rel)?).map_err(errno)?;
+            return Ok(attr(ino, &meta));
+        }
+        // Offline: folders holding pinned or local items are real folders.
+        for root in [self.store.as_ref(), self.local.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Ok(meta) = fs::metadata(root.join(rel))
+                && meta.is_dir()
+            {
+                return Ok(attr(ino, &meta));
+            }
+        }
+        if rel.as_os_str().is_empty() {
+            let meta = fs::metadata(&self.backing).map_err(errno)?;
+            return Ok(attr(ino, &meta));
+        }
+        match self.pins().listed(rel) {
+            Some(Some(listed)) => Ok(listed_attr(ino, listed)),
+            Some(None) => Err(Errno::ENOENT),
+            None => Err(Errno::EHOSTUNREACH),
+        }
+    }
+
     /// Stats `rel` and counts a kernel lookup of it.
     fn entry(&self, rel: &Path) -> Result<FileAttr, Errno> {
-        let meta = fs::symlink_metadata(self.path_of(rel)).map_err(errno)?;
+        let ino = self.inodes().peek(rel);
+        let attr = self.attr_of(rel, ino.unwrap_or(0))?;
         let ino = self.inodes().lookup(rel);
-        Ok(attr(ino, &meta))
+        Ok(FileAttr {
+            ino: INodeNo(ino),
+            ..attr
+        })
+    }
+
+    /// A pinned item went away locally: hide the remote copy rclone still
+    /// shows until the engine deletes it.
+    fn hide(&self, rel: &Path) {
+        self.pins
+            .write()
+            .expect("pins lock")
+            .hidden
+            .insert(rel.to_owned());
+    }
+
+    fn unhide(&self, rel: &Path) {
+        let mut pins = self.pins.write().expect("pins lock");
+        if !pins.hidden.is_empty() {
+            pins.hidden.remove(rel);
+        }
+    }
+
+    /// What folder `rel` shows: the pinned items of the store, the excluded
+    /// items kept locally, then rclone's listing (offline: the saved one),
+    /// each name once.
+    fn list(&self, rel: &Path) -> Result<Vec<DirItem>, Errno> {
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let inodes_peek =
+            |child: &Path, fallback: u64| self.inodes().peek(child).unwrap_or(fallback);
+        let excluded_dir = self.excluded(rel);
+
+        // 1. The store (pinned items), unless the folder is excluded.
+        // 2. The local-only folder: only the excluded items.
+        let locals = [
+            (Place::Store, self.store.as_ref().filter(|_| !excluded_dir)),
+            (Place::Local, self.local.as_ref()),
+        ];
+        for (place, root) in locals {
+            let Some(root) = root else { continue };
+            let Ok(entries) = fs::read_dir(root.join(rel)) else {
+                continue;
+            };
+            for entry in entries {
+                let entry = entry.map_err(errno)?;
+                let name = entry.file_name();
+                let child = rel.join(&name);
+                let wanted = match place {
+                    Place::Local => self.excluded(&child),
+                    _ => !self.excluded(&child),
+                };
+                if !wanted || !seen.insert(name.clone()) {
+                    continue;
+                }
+                let kind = entry
+                    .file_type()
+                    .ok()
+                    .and_then(FileType::from_std)
+                    .unwrap_or(FileType::RegularFile);
+                let ino = inodes_peek(&child, entry.ino());
+                items.push(DirItem { ino, kind, name });
+            }
+        }
+        if excluded_dir {
+            return Ok(items);
+        }
+
+        // 3. rclone, or offline the saved listing.
+        let pins = self.pins();
+        let keep = |name: &OsStr| {
+            let child = rel.join(name);
+            !self.excluded(&child) && !pins.is_hidden(&child)
+        };
+        if self.gate.is_offline() {
+            if let Some(listed) = pins.listings.get(rel) {
+                for (i, l) in listed.iter().enumerate() {
+                    if keep(&l.name) && seen.insert(l.name.clone()) {
+                        let kind = if l.dir {
+                            FileType::Directory
+                        } else {
+                            FileType::RegularFile
+                        };
+                        let ino = inodes_peek(&rel.join(&l.name), u64::MAX - i as u64);
+                        items.push(DirItem {
+                            ino,
+                            kind,
+                            name: l.name.clone(),
+                        });
+                    }
+                }
+            } else if items.is_empty() {
+                // Nothing known about this folder.
+                return Err(Errno::EHOSTUNREACH);
+            }
+            return Ok(items);
+        }
+        drop(pins);
+        self.ready()?;
+        let entries = match fs::read_dir(self.backing.join(rel)) {
+            Ok(entries) => entries,
+            // Only in the store (created in a pinned folder, not uploaded).
+            Err(_) if !items.is_empty() || self.place(rel, false) == Place::Store => {
+                return Ok(items);
+            }
+            Err(e) => return Err(errno(e)),
+        };
+        let pins = self.pins();
+        for entry in entries {
+            let entry = entry.map_err(errno)?;
+            let name = entry.file_name();
+            let child = rel.join(&name);
+            if self.excluded(&child) || pins.is_hidden(&child) || !seen.insert(name.clone()) {
+                continue;
+            }
+            let kind = entry
+                .file_type()
+                .ok()
+                .and_then(FileType::from_std)
+                .unwrap_or(FileType::RegularFile);
+            // Known inodes keep their number; others show the backing one
+            // (informational only: the kernel looks names up).
+            let ino = inodes_peek(&child, entry.ino());
+            items.push(DirItem { ino, kind, name });
+        }
+        Ok(items)
     }
 
     fn add_handle(&self, handle: Handle) -> FileHandle {
@@ -540,16 +789,18 @@ impl Filesystem for RelayFs {
                 && let Ok(handle) = self.handle(fh)
                 && let Handle::File(of) = &*handle
             {
-                return of.get().metadata().map_err(errno);
+                return of.get().metadata().map(Stat::Meta).map_err(errno);
             }
-            match self.real(ino) {
-                Ok(path) => fs::symlink_metadata(path).map_err(errno),
+            match self.rel(ino) {
+                Ok(rel) => return self.attr_of(&rel, ino.0).map(Stat::Attr),
                 // Deleted while open: the kernel may not pass the handle.
                 Err(e) => self.open_file_of(ino.0).ok_or(e)?.metadata().map_err(errno),
             }
+            .map(Stat::Meta)
         });
         match result {
-            Ok(meta) => reply.attr(&TTL, &attr(ino.0, &meta)),
+            Ok(Stat::Meta(meta)) => reply.attr(&TTL, &attr(ino.0, &meta)),
+            Ok(Stat::Attr(attr)) => reply.attr(&TTL, &attr),
             Err(e) => reply.error(e),
         }
     }
@@ -607,8 +858,9 @@ impl Filesystem for RelayFs {
             let rel = self.child(parent, name)?;
             fs::DirBuilder::new()
                 .mode(mode & !umask & 0o7777)
-                .create(self.path_for_new(&rel)?)
+                .create(self.path_for_new(&rel)?.1)
                 .map_err(errno)?;
+            self.unhide(&rel);
             self.entry(&rel)
         });
         match result {
@@ -620,7 +872,11 @@ impl Filesystem for RelayFs {
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         let result = self.with_backing(|| {
             let rel = self.child(parent, name)?;
-            fs::remove_file(self.path_of(&rel)).map_err(errno)?;
+            let place = self.place(&rel, false);
+            fs::remove_file(self.path_of(&rel)?).map_err(errno)?;
+            if place == Place::Store {
+                self.hide(&rel);
+            }
             self.inodes().unlinked(&rel);
             Ok(())
         });
@@ -633,20 +889,36 @@ impl Filesystem for RelayFs {
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         let result = self.with_backing(|| {
             let rel = self.child(parent, name)?;
-            // Excluded items kept locally inside it count as content.
-            let scaffold = self
-                .local
-                .as_ref()
-                .filter(|_| !self.excluded(&rel))
-                .map(|local| local.join(&rel));
-            if let Some(dir) = &scaffold
-                && fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some())
-            {
-                return Err(Errno::ENOTEMPTY);
+            let place = self.place(&rel, false);
+            // Excluded or pinned items kept locally inside it count as
+            // content.
+            let scaffolds: Vec<PathBuf> =
+                [(Place::Local, &self.local), (Place::Store, &self.store)]
+                    .into_iter()
+                    .filter(|(p, _)| *p != place)
+                    .filter_map(|(_, root)| root.as_ref().map(|r| r.join(&rel)))
+                    .collect();
+            for dir in &scaffolds {
+                if fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()) {
+                    return Err(Errno::ENOTEMPTY);
+                }
             }
-            fs::remove_dir(self.path_of(&rel)).map_err(errno)?;
-            if let Some(dir) = scaffold {
+            if place == Place::Store {
+                // What rclone still lists inside it must be gone too.
+                let shown = self.list(&rel)?;
+                if shown
+                    .iter()
+                    .any(|item| item.name != "." && item.name != "..")
+                {
+                    return Err(Errno::ENOTEMPTY);
+                }
+            }
+            fs::remove_dir(self.path_of(&rel)?).map_err(errno)?;
+            for dir in scaffolds {
                 let _ = fs::remove_dir(dir);
+            }
+            if place == Place::Store {
+                self.hide(&rel);
             }
             self.inodes().unlinked(&rel);
             Ok(())
@@ -667,7 +939,8 @@ impl Filesystem for RelayFs {
     ) {
         let result = self.with_backing(|| {
             let rel = self.child(parent, link_name)?;
-            std::os::unix::fs::symlink(target, self.path_for_new(&rel)?).map_err(errno)?;
+            std::os::unix::fs::symlink(target, self.path_for_new(&rel)?.1).map_err(errno)?;
+            self.unhide(&rel);
             self.entry(&rel)
         });
         match result {
@@ -690,14 +963,20 @@ impl Filesystem for RelayFs {
             let from = self.child(parent, name)?;
             let to = self.child(newparent, newname)?;
             let rflags = rustix::fs::RenameFlags::from_bits(flags.bits()).ok_or(Errno::EINVAL)?;
-            let src = self.path_of(&from);
-            let dst = self.path_for_new(&to)?;
-            if src.starts_with(&self.backing) == dst.starts_with(&self.backing) {
+            let from_place = self.place(&from, false);
+            let src = self.path_of(&from)?;
+            // Saving over an item: it stays where it is (a pinned file
+            // replaced by a temporary file stays in the store).
+            let (to_place, dst) = match self.place(&to, false) {
+                Place::Backing => self.path_for_new(&to)?,
+                place => (place, self.root(place).join(&to)),
+            };
+            if from_place == to_place {
                 rustix::fs::renameat_with(rustix::fs::CWD, &src, rustix::fs::CWD, &dst, rflags)
                     .map_err(|e| Errno::from_i32(e.raw_os_error()))?;
                 // Excluded items kept locally inside a moved folder follow it.
                 if let Some(local) = &self.local
-                    && src.starts_with(&self.backing)
+                    && from_place == Place::Backing
                     && local.join(&from).is_dir()
                 {
                     let target = local.join(&to);
@@ -707,10 +986,15 @@ impl Filesystem for RelayFs {
                     let _ = fs::rename(local.join(&from), target);
                 }
             } else {
-                // Between the local-only folder and rclone: a temporary file
-                // saved under its final name, or the reverse.
+                // Between places (the local-only folder, the store, rclone):
+                // a temporary file saved under its final name, or the
+                // reverse.
                 self.move_across(&src, &dst, rflags)?;
             }
+            if from_place == Place::Store {
+                self.hide(&from);
+            }
+            self.unhide(&to);
             let mut inodes = self.inodes();
             if rflags.contains(rustix::fs::RenameFlags::EXCHANGE) {
                 inodes.exchanged(&from, &to);
@@ -735,9 +1019,10 @@ impl Filesystem for RelayFs {
     ) {
         let result = self.with_backing(|| {
             let rel = self.child(newparent, newname)?;
+            let from_place = self.place(&self.rel(ino)?, false);
             let from = self.real(ino)?;
-            let to = self.path_for_new(&rel)?;
-            if from.starts_with(&self.backing) != to.starts_with(&self.backing) {
+            let (to_place, to) = self.path_for_new(&rel)?;
+            if from_place != to_place {
                 return Err(Errno::EXDEV);
             }
             fs::hard_link(from, to).map_err(errno)?;
@@ -886,44 +1171,7 @@ impl Filesystem for RelayFs {
                     name: "..".into(),
                 },
             ];
-            // The folder itself, then (unless it is excluded) the excluded
-            // items kept locally inside it.
-            let mut sources = vec![self.path_of(&rel)];
-            if let Some(local) = &self.local
-                && !self.excluded(&rel)
-            {
-                sources.push(local.join(&rel));
-            }
-            let mut seen = std::collections::HashSet::new();
-            let inodes = self.inodes();
-            for (i, dir) in sources.iter().enumerate() {
-                let entries = match fs::read_dir(dir) {
-                    Ok(entries) => entries,
-                    // No local item in this folder.
-                    Err(_) if i > 0 => continue,
-                    Err(e) => return Err(errno(e)),
-                };
-                let from_local = !dir.starts_with(&self.backing);
-                for entry in entries {
-                    let entry = entry.map_err(errno)?;
-                    let name = entry.file_name();
-                    let child = rel.join(&name);
-                    // From rclone: not the excluded ones. Locally: only them.
-                    if self.excluded(&child) != from_local || !seen.insert(name.clone()) {
-                        continue;
-                    }
-                    let kind = entry
-                        .file_type()
-                        .ok()
-                        .and_then(FileType::from_std)
-                        .unwrap_or(FileType::RegularFile);
-                    // Known inodes keep their number; others show the backing
-                    // one (informational only: the kernel looks names up).
-                    let ino = inodes.peek(&child).unwrap_or(entry.ino());
-                    items.push(DirItem { ino, kind, name });
-                }
-            }
-            drop(inodes);
+            items.extend(self.list(&rel)?);
             Ok(self.add_handle(Handle::Dir(items)))
         });
         match result {
@@ -983,7 +1231,15 @@ impl Filesystem for RelayFs {
 
     fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
         let result = self.with_backing(|| {
-            rustix::fs::statvfs(&self.backing).map_err(|e| Errno::from_i32(e.raw_os_error()))
+            // Offline: the disk of the store (where writes go).
+            let path = match (&self.store, self.gate.is_offline()) {
+                (Some(store), true) => store.clone(),
+                _ => {
+                    self.ready()?;
+                    self.backing.clone()
+                }
+            };
+            rustix::fs::statvfs(&path).map_err(|e| Errno::from_i32(e.raw_os_error()))
         });
         match result {
             Ok(s) => reply.statfs(
@@ -1003,7 +1259,13 @@ impl Filesystem for RelayFs {
     fn access(&self, _req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
         let result = self.with_backing(|| {
             let access = rustix::fs::Access::from_bits_truncate(mask.bits() as u32);
-            rustix::fs::access(self.real(ino)?, access)
+            let rel = self.rel(ino)?;
+            if self.gate.is_offline() && self.place(&rel, false) == Place::Backing {
+                // Known from the saved listings: permission checks pass,
+                // opening fails.
+                return self.attr_of(&rel, ino.0).map(drop);
+            }
+            rustix::fs::access(self.path_of(&rel)?, access)
                 .map_err(|e| Errno::from_i32(e.raw_os_error()))
         });
         match result {
@@ -1067,7 +1329,8 @@ impl Filesystem for RelayFs {
             // refuses to create without write access. The kernel only sends
             // reads for a read-only handle, so a writable descriptor is safe.
             options.write(true);
-            let file = options.open(self.path_for_new(&rel)?).map_err(errno)?;
+            let file = options.open(self.path_for_new(&rel)?.1).map_err(errno)?;
+            self.unhide(&rel);
             let meta = file.metadata().map_err(errno)?;
             let ino = self.inodes().lookup(&rel);
             // Reopened without O_CREAT/O_EXCL, but writable like here.

@@ -6,11 +6,15 @@
 //!
 //! ```text
 //! ~/Cloud/Google Drive        ← nuage-fs
-//!    └─ everything            → relayed to the hidden rclone mount
+//!    ├─ excluded, created here → the local-only folder
+//!    ├─ pinned                 → the pin store (v1.1)
+//!    └─ everything else        → relayed to the hidden rclone mount
 //! ```
 //!
 //! v1 relays every operation (milestone 4); exclusions (milestone 7) and
-//! offline pinning (v1.1) intercept some paths before they reach rclone.
+//! offline pinning (v1.1, [`PinView`]) intercept some paths before they
+//! reach rclone. Offline ([`MountedFs::set_offline`]), pinned items keep
+//! working and the others are listed from the engine's saved listings.
 //!
 //! Requests are served by several threads, so a slow read (rclone
 //! downloading a file) does not block listings or other files. While the
@@ -20,6 +24,7 @@
 mod fusermount;
 mod gate;
 mod inodes;
+mod pins;
 mod relay;
 
 use std::fmt;
@@ -33,6 +38,7 @@ use std::thread::JoinHandle;
 use fuser::{Config, Session, SessionACL};
 
 pub use nuage_core::ExclusionSet;
+pub use pins::{Listed, PinView};
 
 use gate::Gate;
 use relay::RelayFs;
@@ -53,6 +59,8 @@ pub struct MountedFs {
     gate: Arc<Gate>,
     exclusions: Arc<RwLock<ExclusionSet>>,
     local_only: Option<PathBuf>,
+    pins: Arc<RwLock<PinView>>,
+    store: Option<PathBuf>,
     /// fuse connection number, to abort the session if it does not end.
     connection: Option<u32>,
 }
@@ -80,6 +88,12 @@ pub struct MountConfig {
     /// folder (`data/local-only/<account>`). `None`: no exclusion.
     pub local_only: Option<PathBuf>,
     pub exclusions: ExclusionSet,
+    /// Folder holding the copies of pinned items (`data/pins/<account>`).
+    /// `None`: no pinning.
+    pub store: Option<PathBuf>,
+    pub pins: PinView,
+    /// Mounted while the provider cannot be reached (offline start).
+    pub offline: bool,
 }
 
 impl Default for MountConfig {
@@ -89,6 +103,9 @@ impl Default for MountConfig {
             wait: DEFAULT_WAIT,
             local_only: None,
             exclusions: ExclusionSet::default(),
+            store: None,
+            pins: PinView::default(),
+            offline: false,
         }
     }
 }
@@ -98,15 +115,19 @@ impl Default for MountConfig {
 /// Mounts through the `fusermount3` found in `PATH` (in the Flatpak, the
 /// wrapper that relays to the host), like rclone.
 pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Result<MountedFs> {
-    let gate = Arc::new(Gate::new(true, config.wait));
-    if let Some(local) = &config.local_only {
-        std::fs::create_dir_all(local)?;
+    let gate = Arc::new(Gate::new(!config.offline, config.wait));
+    gate.set_offline(config.offline);
+    for dir in [&config.local_only, &config.store].into_iter().flatten() {
+        std::fs::create_dir_all(dir)?;
     }
     let exclusions = Arc::new(RwLock::new(config.exclusions.clone()));
+    let pins = Arc::new(RwLock::new(config.pins.clone()));
     let fs = RelayFs::new(
         backing.to_owned(),
         config.local_only.clone(),
         Arc::clone(&exclusions),
+        config.store.clone(),
+        Arc::clone(&pins),
         Arc::clone(&gate),
     );
     let mount_point = mount_point.canonicalize()?;
@@ -158,6 +179,8 @@ pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Re
         gate,
         exclusions,
         local_only: config.local_only.clone(),
+        pins,
+        store: config.store.clone(),
     })
 }
 
@@ -168,6 +191,31 @@ impl MountedFs {
 
     pub fn backing(&self) -> &Path {
         &self.backing
+    }
+
+    /// Offline (the provider cannot be reached): pinned items work from the
+    /// store, others are listed from the saved listings and cannot be
+    /// opened (`EHOSTUNREACH`), without waiting.
+    pub fn set_offline(&self, offline: bool) {
+        self.gate.set_offline(offline);
+    }
+
+    pub fn is_offline(&self) -> bool {
+        self.gate.is_offline()
+    }
+
+    /// Replaces the pins. Items deleted here since the engine computed
+    /// `view` stay hidden while their copy is gone.
+    pub fn set_pins(&self, mut view: PinView) {
+        let mut current = self.pins.write().expect("pins lock");
+        if let Some(store) = &self.store {
+            for rel in &current.hidden {
+                if std::fs::symlink_metadata(store.join(rel)).is_err() && view.covers(rel) {
+                    view.hidden.insert(rel.clone());
+                }
+            }
+        }
+        *current = view;
     }
 
     /// Marks the backing folder as usable or not. While it is not, requests

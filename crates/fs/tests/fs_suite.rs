@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use nuage_core::{ExclusionRule, ExclusionSet};
-use nuage_fs::{MountConfig, MountedFs};
+use nuage_fs::{Listed, MountConfig, MountedFs, PinView};
 
 fn globs(patterns: &[&str]) -> ExclusionSet {
     let rules: Vec<ExclusionRule> = patterns
@@ -46,6 +46,7 @@ struct Fixture {
     backing: PathBuf,
     mnt: PathBuf,
     local: PathBuf,
+    store: PathBuf,
     _dir: tempfile::TempDir,
 }
 
@@ -65,10 +66,12 @@ impl Fixture {
         let backing = dir.path().join("backing");
         let mnt = dir.path().join("mnt");
         let local = dir.path().join("local-only");
+        let store = dir.path().join("pins");
         fs::create_dir_all(&backing).unwrap();
         fs::create_dir_all(&mnt).unwrap();
         let config = MountConfig {
             local_only: config.local_only.map(|_| local.clone()),
+            store: config.store.map(|_| store.clone()),
             ..config
         };
         let fs = nuage_fs::mount(&backing, &mnt, &config).unwrap();
@@ -77,6 +80,7 @@ impl Fixture {
             backing,
             mnt,
             local,
+            store,
             _dir: dir,
         })
     }
@@ -91,6 +95,10 @@ impl Fixture {
 
     fn l(&self, rel: &str) -> PathBuf {
         self.local.join(rel)
+    }
+
+    fn s(&self, rel: &str) -> PathBuf {
+        self.store.join(rel)
     }
 
     fn fs(&self) -> &MountedFs {
@@ -550,4 +558,161 @@ fn reincluded_items_go_to_the_cloud() {
         ErrorKind::NotFound
     );
     assert!(f.b("a.tmp").exists(), "nothing is deleted in the cloud");
+}
+
+fn pinning(pins: &[&str]) -> MountConfig {
+    MountConfig {
+        // The fixture puts the store next to the backing folder.
+        store: Some(PathBuf::new()),
+        pins: PinView {
+            pins: pins.iter().map(PathBuf::from).collect(),
+            ..PinView::default()
+        },
+        ..MountConfig::default()
+    }
+}
+
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn pinned_items_live_in_the_store() {
+    let f = fixture!(pinning(&["notes.txt", "Work"]));
+    fs::write(f.b("notes.txt"), "remote").unwrap();
+    fs::write(f.b("other.txt"), "other").unwrap();
+    fs::create_dir_all(f.b("Work")).unwrap();
+    fs::write(f.b("Work/todo.txt"), "remote todo").unwrap();
+
+    // Not downloaded yet: still read through rclone.
+    assert_eq!(fs::read_to_string(f.m("notes.txt")).unwrap(), "remote");
+    // Downloaded (the engine puts the copy in the store): read from it.
+    fs::write(f.s("notes.txt"), "pinned").unwrap();
+    assert_eq!(fs::read_to_string(f.m("notes.txt")).unwrap(), "pinned");
+    fs::write(f.m("notes.txt"), "edited").unwrap();
+    assert_eq!(fs::read_to_string(f.s("notes.txt")).unwrap(), "edited");
+    assert_eq!(
+        fs::read_to_string(f.b("notes.txt")).unwrap(),
+        "remote",
+        "rclone never sees it"
+    );
+
+    // New files in a pinned folder go to the store; the listing merges.
+    fs::write(f.m("Work/new.txt"), "new").unwrap();
+    assert_eq!(fs::read_to_string(f.s("Work/new.txt")).unwrap(), "new");
+    assert!(!f.b("Work/new.txt").exists());
+    assert_eq!(names(&f.m("Work")), ["new.txt", "todo.txt"]);
+    assert_eq!(names(&f.mnt), ["Work", "notes.txt", "other.txt"]);
+
+    // Deleted locally: hidden, although rclone still lists it.
+    fs::write(f.s("Work/todo.txt"), "pinned todo").unwrap();
+    fs::remove_file(f.m("Work/todo.txt")).unwrap();
+    assert!(!f.s("Work/todo.txt").exists());
+    assert!(
+        f.b("Work/todo.txt").exists(),
+        "deleted remotely by the engine"
+    );
+    assert!(!f.m("Work/todo.txt").exists());
+    assert_eq!(names(&f.m("Work")), ["new.txt"]);
+    // Created again: shown again.
+    fs::write(f.m("Work/todo.txt"), "again").unwrap();
+    assert_eq!(fs::read_to_string(f.m("Work/todo.txt")).unwrap(), "again");
+}
+
+#[test]
+fn saving_over_a_pinned_file_stays_in_the_store() {
+    // KeePassXC, LibreOffice and others write a temporary file next to the
+    // document, then rename it over the document.
+    let f = fixture!(pinning(&["Passwords/db.kdbx"]));
+    fs::create_dir_all(f.b("Passwords")).unwrap();
+    fs::write(f.b("Passwords/db.kdbx"), "v1").unwrap();
+    fs::create_dir_all(f.s("Passwords")).unwrap();
+    fs::write(f.s("Passwords/db.kdbx"), "v1").unwrap();
+
+    let tmp = f.m("Passwords/db.kdbx.Ab12Cd");
+    fs::write(&tmp, "v2").unwrap();
+    assert!(
+        f.s("Passwords/db.kdbx.Ab12Cd").exists(),
+        "the temporary file is pinned too"
+    );
+    fs::rename(&tmp, f.m("Passwords/db.kdbx")).unwrap();
+    assert_eq!(fs::read_to_string(f.m("Passwords/db.kdbx")).unwrap(), "v2");
+    assert_eq!(fs::read_to_string(f.s("Passwords/db.kdbx")).unwrap(), "v2");
+    assert_eq!(fs::read_to_string(f.b("Passwords/db.kdbx")).unwrap(), "v1");
+    assert_eq!(names(&f.m("Passwords")), ["db.kdbx"]);
+
+    // A temporary file elsewhere (rclone), renamed over the pinned file.
+    fs::write(f.m("Passwords/draft"), "v3").unwrap();
+    assert!(f.b("Passwords/draft").exists());
+    fs::rename(f.m("Passwords/draft"), f.m("Passwords/db.kdbx")).unwrap();
+    assert_eq!(fs::read_to_string(f.s("Passwords/db.kdbx")).unwrap(), "v3");
+    assert!(!f.b("Passwords/draft").exists());
+}
+
+#[test]
+fn offline_pinned_items_work_and_others_fail_at_once() {
+    let mut config = pinning(&["Docs/keep.txt"]);
+    config.pins.listings.insert(
+        PathBuf::new(),
+        vec![
+            Listed {
+                name: "Docs".into(),
+                dir: true,
+                size: 0,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+            Listed {
+                name: "big.iso".into(),
+                dir: false,
+                size: 4_000_000_000,
+                modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            },
+        ],
+    );
+    config.pins.listings.insert(
+        PathBuf::from("Docs"),
+        vec![Listed {
+            name: "keep.txt".into(),
+            dir: false,
+            size: 4,
+            modified: SystemTime::UNIX_EPOCH,
+        }],
+    );
+    // Started without network: the hidden mount is an empty folder.
+    config.offline = true;
+    let f = fixture!(config);
+    fs::create_dir_all(f.s("Docs")).unwrap();
+    fs::write(f.s("Docs/keep.txt"), "kept").unwrap();
+
+    assert_eq!(names(&f.mnt), ["Docs", "big.iso"]);
+    assert_eq!(fs::metadata(f.m("big.iso")).unwrap().len(), 4_000_000_000);
+    assert_eq!(fs::read_to_string(f.m("Docs/keep.txt")).unwrap(), "kept");
+    fs::write(f.m("Docs/keep.txt"), "kept, edited offline").unwrap();
+    assert_eq!(
+        fs::read_to_string(f.s("Docs/keep.txt")).unwrap(),
+        "kept, edited offline"
+    );
+
+    // Not pinned: a clean error at once, not a hang.
+    let started = Instant::now();
+    let err = File::open(f.m("big.iso")).unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(libc::EHOSTUNREACH), "{err}");
+    let err = fs::write(f.m("new.txt"), "x").unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(libc::EHOSTUNREACH), "{err}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        fs::metadata(f.m("nothing-here")).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+
+    // Back online: the engine mounted rclone again.
+    fs::write(f.b("big.iso"), "iso").unwrap();
+    f.fs().set_offline(false);
+    f.fs().set_available(true);
+    assert_eq!(fs::read_to_string(f.m("big.iso")).unwrap(), "iso");
 }
