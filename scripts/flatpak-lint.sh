@@ -14,7 +14,9 @@ manifest=build-aux/flatpak/io.github.felixilgatto.Nuage.yml
 metainfo=data/io.github.felixilgatto.Nuage.metainfo.xml
 
 # Screenshots are published once merged into main: before that, an image
-# that cannot be reached must at least be in data/screenshots/.
+# that cannot be reached must at least be in data/screenshots/ (and the
+# repository's catalogue, which drops unreachable ones, has none).
+unpublished=0
 if ! appstream_out=$($lint appstream "$metainfo" 2>&1); then
     printf '%s\n' "$appstream_out"
     if printf '%s' "$appstream_out" | grep -E '^[EW]:' | grep -vq 'screenshot-image-not-found'; then
@@ -25,19 +27,22 @@ if ! appstream_out=$($lint appstream "$metainfo" 2>&1); then
         [ -f "data/screenshots/${url##*/}" ] || { echo "missing screenshot ${url##*/}" >&2; exit 1; }
     done
     echo "Screenshots not published yet (main), present in data/screenshots/: accepted."
+    unpublished=1
 fi
 
 status=0
 check() {
     out=$($lint "$@" 2>&1) || true
     printf '%s\n' "$out"
-    printf '%s' "$out" | python3 -c '
-import json, sys
+    printf '%s' "$out" | UNPUBLISHED=$unpublished python3 -c '
+import json, os, sys
 tolerated = {
     "finish-args-flatpak-spawn-access",
     "finish-args-home-filesystem-access",
     "appstream-screenshots-not-mirrored-in-ostree",
 }
+if os.environ.get("UNPUBLISHED") == "1":
+    tolerated.add("appstream-missing-screenshots")
 text = sys.stdin.read().strip()
 report = json.loads(text) if text else {}
 left = sorted(set(report.get("errors", [])) - tolerated)
