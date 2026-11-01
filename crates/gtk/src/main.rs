@@ -294,6 +294,26 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
             }),
         );
     }
+    {
+        let ui = Rc::clone(ui);
+        let app2 = app.clone();
+        action(
+            "restart",
+            Box::new(move || {
+                let (ui, app) = (Rc::clone(&ui), app2.clone());
+                glib::spawn_future_local(async move { restart(&app, &ui).await });
+            }),
+        );
+    }
+    // A newer version installed while running: offer to restart.
+    {
+        let ui = Rc::clone(ui);
+        glib::spawn_future_local(async move {
+            ui.backend.wait_for_update().await;
+            tracing::info!("a new version is installed");
+            ui.update_installed();
+        });
+    }
     // Notification button: open a folder.
     let open = gio::SimpleAction::new("open-folder", Some(glib::VariantTy::STRING));
     open.connect_activate(|_, param| {
@@ -307,13 +327,38 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
 /// "Quit": stops the application and the daemon, following the "quit with
 /// pending uploads" setting.
 async fn quit(app: &adw::Application, ui: &Rc<Ui>) {
+    if stop_daemon(ui).await {
+        app.quit();
+    }
+}
+
+/// "Restart" after an update: quits, and the newest version starts.
+async fn restart(app: &adw::Application, ui: &Rc<Ui>) {
+    if !stop_daemon(ui).await {
+        return;
+    }
+    match ui.backend.start_latest_version().await {
+        Ok(()) => app.quit(),
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot start the new version");
+            ui.present();
+            ui.toast(
+                &gettext("Nuage could not restart: {}. Quit it and open it again.")
+                    .replace("{}", &e),
+            );
+        }
+    }
+}
+
+/// Stops the daemon, asking first if uploads are pending ("ask" setting).
+/// Whether the application may quit.
+async fn stop_daemon(ui: &Rc<Ui>) -> bool {
     match ui.backend.call(Command::DaemonStop { now: false }).await {
-        Ok(_) => app.quit(),
+        Ok(_) => true,
         // Setting "ask": uploads are pending.
         Err(message) => {
             if !ui.backend.daemon_running().await {
-                app.quit();
-                return;
+                return true;
             }
             ui.present();
             let dialog = adw::AlertDialog::builder()
@@ -325,10 +370,11 @@ async fn quit(app: &adw::Application, ui: &Rc<Ui>) {
             dialog.set_response_appearance("now", adw::ResponseAppearance::Destructive);
             dialog.set_default_response(Some("wait"));
             let response = dialog.choose_future(Some(&ui.window)).await;
-            if response == "now" {
-                let _ = ui.backend.call(Command::DaemonStop { now: true }).await;
-                app.quit();
+            if response != "now" {
+                return false;
             }
+            let _ = ui.backend.call(Command::DaemonStop { now: true }).await;
+            true
         }
     }
 }

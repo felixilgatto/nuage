@@ -6,7 +6,9 @@
 # rclone or nuage-fs mount, libfuse runs this script with a socket in
 # $_FUSE_COMMFD and expects the /dev/fuse descriptor back on it. The mount
 # is done on the host by nuage-fuse-relay, shipped in the Flatpak and run
-# from the application's host path (app-path in /.flatpak-info): it runs the
+# from the application's host path (app-path in /.flatpak-info, through the
+# deploy's "active" link: an update removes the running version's own
+# directory, and mounting would fail until a restart). The relay runs the
 # host's fusermount3 with a socket of its own (Ubuntu 26.04's AppArmor
 # profile refuses sockets inherited from the sandbox) and passes the
 # descriptor back. See crates/fuse-relay.
@@ -21,9 +23,12 @@ if [ -n "${_FUSE_COMMFD:-}" ]; then
         echo "fusermount3 wrapper: app-path not found in /.flatpak-info" >&2
         exit 1
     fi
+    # .../<branch>/<commit>/files -> .../<branch>/active/files
+    deploy=${app_path%/files}
+    relay="${deploy%/*}/active/files/bin/nuage-fuse-relay"
     exec flatpak-spawn --host --watch-bus \
         --env=_FUSE_COMMFD="$_FUSE_COMMFD" --forward-fd="$_FUSE_COMMFD" \
-        "$app_path/bin/nuage-fuse-relay" "$@"
+        "$relay" "$@"
 fi
 # Unmount (-u [-z]), --version: no descriptor to pass.
 exec flatpak-spawn --host --watch-bus fusermount3 "$@"

@@ -4,6 +4,10 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- After an update installed while Nuage runs, folders still mount, and Nuage
+  offers to restart into the new version.
+- Leaving the folder screen without starting the sync no longer leaves a
+  half-added account; going back is locked while the folder is set up.
 - After adding an account, the window stays open on the accounts list, with
   "Open Folder"; "Start Sync" shows that it is working.
 - How to uninstall, in the README.

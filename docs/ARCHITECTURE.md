@@ -137,7 +137,9 @@ The sandbox has neither `fusermount3` nor the right to mount.
 1. libfuse (rclone) or `nuage-fs` run it with a socket in `$_FUSE_COMMFD`.
 2. It runs `nuage-fuse-relay` on the host with `flatpak-spawn --host
    --forward-fd`, from the application's host path (`app-path` in
-   `/.flatpak-info`).
+   `/.flatpak-info`), through the deploy's `active` link: an update removes
+   the running version's directory, and the relay of the new version is
+   used until Nuage restarts.
 3. The relay creates its own socket pair, runs the host's `fusermount3`
    with it (Ubuntu 26.04's AppArmor profile refuses sockets inherited from
    the sandbox), receives the `/dev/fuse` descriptor and passes it back on

@@ -201,7 +201,69 @@ impl Backend {
         })
         .await
     }
+
+    /// In the Flatpak, returns once a newer version of Nuage is installed
+    /// while this one runs (an update or a reinstall): this instance and its
+    /// daemon keep running the old version until restarted. Never returns
+    /// outside the Flatpak or without the portal.
+    pub async fn wait_for_update(&self) {
+        let installed = in_flatpak()
+            && self
+                .run(async move {
+                    use futures_util::StreamExt;
+                    let flatpak = ashpd::flatpak::Flatpak::new().await.map_err(message)?;
+                    let monitor = flatpak.create_update_monitor().await.map_err(message)?;
+                    let mut updates = monitor.receive_update_available().await.map_err(message)?;
+                    while let Some(info) = updates.next().await {
+                        // Not only on the remote: installed here.
+                        if !info.local_commit().is_empty()
+                            && info.local_commit() != info.running_commit()
+                        {
+                            return Ok(());
+                        }
+                    }
+                    Err("the update monitor closed".to_owned())
+                })
+                .await
+                .inspect_err(|e| tracing::info!(error = %e, "no update monitor"))
+                .is_ok();
+        if !installed {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    /// Starts the newest installed version of Nuage once this instance has
+    /// quit (its D-Bus name is free; GApplication would hand the launch back
+    /// to it otherwise).
+    pub async fn start_latest_version(&self) -> Result<(), String> {
+        self.run(async move {
+            use ashpd::flatpak::{Flatpak, SpawnFlags, SpawnOptions};
+            let flatpak = Flatpak::new().await.map_err(message)?;
+            flatpak
+                .spawn(
+                    "/",
+                    &["sh", "-c", RELAUNCH],
+                    std::collections::HashMap::<u32, std::os::fd::OwnedFd>::new(),
+                    std::collections::HashMap::new(),
+                    SpawnFlags::LatestVersion.into(),
+                    SpawnOptions::default(),
+                )
+                .await
+                .map(|_| ())
+                .map_err(message)
+        })
+        .await
+    }
 }
+
+/// Waits (up to 30 s) for the running instance to release the
+/// application's name, then starts the application.
+const RELAUNCH: &str = concat!(
+    "for i in $(seq 60); do ",
+    "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus ",
+    "--method org.freedesktop.DBus.NameHasOwner io.github.felixilgatto.Nuage ",
+    "| grep -q true || break; sleep 0.5; done; exec nuage-gtk"
+);
 
 fn in_flatpak() -> bool {
     std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists()

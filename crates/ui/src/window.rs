@@ -127,6 +127,27 @@ impl Ui {
         self.toasts.add_toast(toast);
     }
 
+    /// A newer version is installed: offer to restart (a toast that stays,
+    /// and a notification, since the window is often closed).
+    pub fn update_installed(&self) {
+        let text = gettext("A new version of Nuage is installed");
+        let toast = adw::Toast::builder()
+            .title(&text)
+            .button_label(gettext("Restart"))
+            .action_name("app.restart")
+            .timeout(0)
+            .build();
+        self.toasts.add_toast(toast);
+        let notification = gio::Notification::new(&text);
+        notification.set_body(Some(&gettext(
+            "Restart Nuage to use it. Your folders are unmounted for a moment.",
+        )));
+        notification.set_default_action("app.open-window");
+        notification.add_button(&gettext("Restart"), "app.restart");
+        self.app
+            .send_notification(Some("update-installed"), &notification);
+    }
+
     pub fn set_tray_available(&self, available: bool) {
         self.state.borrow_mut().tray = available;
     }

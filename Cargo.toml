@@ -38,6 +38,7 @@ nuage-fs = { path = "crates/fs" }
 nuage-tray = { path = "crates/tray" }
 nuage-ui = { path = "crates/ui" }
 ashpd = { version = "0.12", default-features = false }
+futures-util = { version = "0.3", default-features = false }
 
 # Third-party crates
 anyhow = "1"

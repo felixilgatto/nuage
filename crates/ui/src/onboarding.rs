@@ -10,7 +10,7 @@
 //! Nothing provider-specific lives here: the guide, the client ID format
 //! and the form come from [`ProviderInfo`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -73,11 +73,17 @@ fn main_button(label: &str) -> gtk::Button {
 }
 
 /// Shows that `button` is working: a spinner and `label`, or back to its
-/// normal `idle` label. `form` (the choices the button applies) is locked
-/// meanwhile; its sensitivity also tells validation not to re-enable the
-/// button.
-fn set_busy(button: &gtk::Button, form: &impl IsA<gtk::Widget>, busy: Option<&str>, idle: &str) {
+/// normal `idle` label. `form` (the choices the button applies) and going
+/// back from `page` are locked meanwhile; the form's sensitivity also tells
+/// validation not to re-enable the button.
+fn set_busy(
+    button: &gtk::Button,
+    (form, page): (&adw::PreferencesGroup, &adw::NavigationPage),
+    busy: Option<&str>,
+    idle: &str,
+) {
     form.set_sensitive(busy.is_none());
+    page.set_can_pop(busy.is_none());
     match busy {
         Some(label) => {
             let content = gtk::Box::builder()
@@ -702,13 +708,44 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
         });
     }
 
-    let title = account.display_name.clone();
+    let nav_page = page(&account.display_name, &content);
+    // Set when the account is mounted: leaving the page before that cancels
+    // the account, signed in but never set up.
+    let done = Rc::new(Cell::new(false));
+    {
+        let (ui, done, account) = (Rc::clone(ui), Rc::clone(&done), account.clone());
+        nav_page.connect_hidden(move |_| {
+            if done.replace(true) {
+                return;
+            }
+            let (ui, account) = (Rc::clone(&ui), account.clone());
+            glib::spawn_future_local(async move {
+                let removed = ui
+                    .backend
+                    .call(Command::AccountRemove {
+                        account: account.id.clone(),
+                        force: false,
+                    })
+                    .await;
+                match removed {
+                    Ok(_) => ui.toast(
+                        &gettext("{account} was not added")
+                            .replace("{account}", &account.display_name),
+                    ),
+                    Err(e) => tracing::warn!(error = %e, "cannot cancel the account"),
+                }
+                ui.reload().await;
+            });
+        });
+    }
     let ui2 = Rc::clone(ui);
+    let page2 = nav_page.clone();
     start.connect_clicked(move |button| {
         let idle = gettext("Start Sync");
-        set_busy(button, &group, Some(&gettext("Setting up the folder…")), &idle);
+        set_busy(button, (&group, &page2), Some(&gettext("Setting up the folder…")), &idle);
         let (ui, account, path) = (Rc::clone(&ui2), account.clone(), folder.borrow().clone());
         let (button, group, autostart) = (button.clone(), group.clone(), autostart.clone());
+        let (page, done) = (page2.clone(), Rc::clone(&done));
         glib::spawn_future_local(async move {
             let mut account = account;
             if path != account.mount_point {
@@ -724,7 +761,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                     Ok(_) => {}
                     Err(e) => {
                         ui.toast(&e);
-                        set_busy(&button, &group, None, &idle);
+                        set_busy(&button, (&group, &page), None, &idle);
                         return;
                     }
                 }
@@ -737,7 +774,7 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                 .await
             {
                 ui.toast(&e);
-                set_busy(&button, &group, None, &idle);
+                set_busy(&button, (&group, &page), None, &idle);
                 return;
             }
             if first && autostart.is_active() {
@@ -751,10 +788,12 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
                     ),
                 }
             }
+            done.set(true);
+            page.set_can_pop(true);
             finish(&ui, &account);
         });
     });
-    page(&title, &content)
+    nav_page
 }
 
 /// The account is syncing: back to the accounts list, which shows its
