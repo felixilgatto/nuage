@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Nuage contributors -->
+<component type="desktop-application">
+  <id>io.github.felixilgatto.Nuage</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Nuage</name>
+  <summary>Your cloud storage as a regular folder</summary>
+  <developer id="io.github.felixilgatto">
+    <name>Nuage contributors</name>
+  </developer>
+  <description>
+    <p>
+      Nuage shows your cloud storage accounts as folders of your home, like
+      any other folder: files open in your usual applications and are
+      downloaded only when you use them. Changes are uploaded in the
+      background.
+    </p>
+    <ul>
+      <li>Set up an account in a few screens, signed in through your browser</li>
+      <li>See what is syncing, pause and resume uploads</li>
+      <li>Browse, upload, move and share files, even when an account is not mounted</li>
+      <li>Keep folders or patterns out of the sync</li>
+      <li>Google Docs open in your web browser</li>
+    </ul>
+    <p>
+      Nuage uses rclone. Google Drive is supported; your own Google sign-in
+      client keeps your access private to you.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.felixilgatto.Nuage.desktop</launchable>
+  <provides>
+    <binary>nuage-gtk</binary>
+    <binary>nuage</binary>
+    <binary>nuaged</binary>
+  </provides>
+  <url type="homepage">https://github.com/felixilgatto/nuage</url>
+  <url type="bugtracker">https://github.com/felixilgatto/nuage/issues</url>
+  <url type="vcs-browser">https://github.com/felixilgatto/nuage</url>
+  <categories>
+    <category>Network</category>
+    <category>FileTransfer</category>
+  </categories>
+  <keywords>
+    <keyword>cloud</keyword>
+    <keyword>Google Drive</keyword>
+    <keyword>sync</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#a7c7f2</color>
+    <color type="primary" scheme_preference="dark">#1c3a66</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-01">
+      <description>
+        <p>First version: Google Drive and local folders, mounted with rclone.</p>
+      </description>
+    </release>
+  </releases>
+</component>

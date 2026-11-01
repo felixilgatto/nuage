@@ -108,3 +108,43 @@ jobs:
         with:
           name: nuage-native
           path: target/dist/
+
+  flatpak:
+    # The desktop application: offline build of the manifest, bundle as an
+    # artifact, and the Flathub linter.
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: cargo-sources.json matches Cargo.lock
+        run: |
+          python3 scripts/cargo-sources.py
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code build-aux/flatpak/cargo-sources.json \
+            || { echo "::error::Regenerate it: scripts/cargo-sources.py"; exit 1; }
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: nuage.flatpak
+          manifest-path: build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock') }}
+          upload-artifact: true
+
+      - name: Flathub linter
+        # Tolerated in v1 (docs/BUILDING.md): the screenshots, not taken yet.
+        # The flatpak-spawn warning (fusermount3 wrapper) is only a warning.
+        run: |
+          flatpak-builder-lint manifest build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+          flatpak-builder-lint appstream data/io.github.felixilgatto.Nuage.metainfo.xml
+          flatpak-builder-lint repo repo > lint.json || true
+          cat lint.json
+          python3 - lint.json <<'PY'
+          import json, sys
+          tolerated = {"metainfo-missing-screenshots", "appstream-screenshots-not-mirrored-in-ostree"}
+          errors = set(json.load(open(sys.argv[1])).get("errors", [])) - tolerated
+          if errors:
+              sys.exit(f"flatpak-builder-lint: {sorted(errors)}")
+          PY

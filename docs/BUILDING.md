@@ -68,7 +68,48 @@ flatpak run --command="$PWD/target/flatpak-sdk/debug/nuage-gtk" \
   --talk-name=org.kde.StatusNotifierWatcher org.gnome.Sdk//51
 ```
 
-The Flatpak manifest (`flatpak-builder`) comes later.
+## Flatpak
+
+The manifest is `build-aux/flatpak/io.github.felixilgatto.Nuage.yml`. The
+build is offline: crates come from `build-aux/flatpak/cargo-sources.json`,
+generated from `Cargo.lock`. Regenerate it after any dependency change (CI
+fails otherwise):
+
+```sh
+scripts/cargo-sources.py
+```
+
+Build, install for your user and run (needs `flatpak-builder`, or the
+`org.flatpak.Builder` Flatpak):
+
+```sh
+flatpak run org.flatpak.Builder --user --install --force-clean \
+  --state-dir=target/flatpak-builder target/flatpak-build \
+  build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+flatpak run io.github.felixilgatto.Nuage
+```
+
+Or make a bundle to install elsewhere:
+
+```sh
+flatpak run org.flatpak.Builder --force-clean --repo=target/flatpak-repo \
+  --state-dir=target/flatpak-builder target/flatpak-build \
+  build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+flatpak build-bundle target/flatpak-repo nuage.flatpak io.github.felixilgatto.Nuage
+```
+
+CI builds the bundle (artifact `nuage.flatpak`) and runs
+`flatpak-builder-lint`. Two of its findings are expected for now: access to
+`flatpak-spawn` (a warning; the `fusermount3` wrapper needs it, see
+[ARCHITECTURE.md](ARCHITECTURE.md)) and the missing screenshots (an error
+that CI tolerates until screenshots are added to the metainfo).
+
+## Releases
+
+Push a tag `v<version>` (after a `## [<version>]` section in
+`CHANGELOG.md`): `release.yml` builds the Flatpak bundle, the tarball and
+the `.deb`, and publishes them in a GitHub release with their checksums
+and the changelog section.
 
 ## Contributing
 

@@ -5,7 +5,7 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 10. The daemon supervises rclone, signs in to Google
+> Status: milestone 11. The daemon supervises rclone, signs in to Google
 > Drive, mounts each account in two layers (`nuage-fs` over a hidden rclone
 > mount), applies exclusions, pauses uploads, reports the status and runs
 > file operations; the CLI and the desktop application (setup, main window,
@@ -354,6 +354,24 @@ then `PATH`; log in the user data folder) and never stops it on close.
   "ask", a dialog offers Wait / Quit Now.
 - Targets GTK 4.14 and libadwaita 1.5 (Ubuntu 24.04, CI); the GNOME 51
   runtime is newer.
+
+## Flatpak package
+
+`build-aux/flatpak/io.github.felixilgatto.Nuage.yml`, GNOME 51 runtime:
+
+- `rclone`: the official archive, pinned by sha256 (x86_64, aarch64), and
+  its license.
+- `nuage`: an offline `cargo build --release` of `nuaged`, `nuage` and
+  `nuage-gtk` from the vendored crates of `cargo-sources.json`
+  (`scripts/cargo-sources.py`, from `Cargo.lock`; CI checks it is current);
+  `nuage-fuse-relay` linked statically (it runs on the host); the
+  `fusermount3` wrapper; the desktop entry, metainfo and icons of `data/`.
+- Permissions: Wayland/X11, DRI, IPC, network, `home`, and the bus names of
+  `org.freedesktop.Flatpak` (the wrapper only), the tray watcher and the
+  Secret service. Never `--filesystem=host`.
+
+`release.yml` (tag `v*`) rebuilds the bundle and the native packages and
+publishes them with their checksums and the `CHANGELOG.md` section.
 
 ## Native packages
 

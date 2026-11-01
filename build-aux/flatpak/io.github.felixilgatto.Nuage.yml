@@ -1,0 +1,91 @@
+# Nuage desktop application.
+#
+# Build from the repository root:
+#   flatpak-builder --user --install --force-clean build-dir \
+#       build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+#
+# Offline Cargo build: crates come from cargo-sources.json, regenerated with
+# scripts/cargo-sources.py whenever Cargo.lock changes (CI checks it).
+id: io.github.felixilgatto.Nuage
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: nuage-gtk
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=ipc
+  # Talking to the cloud providers; the sign-in page is served on 127.0.0.1.
+  - --share=network
+  # Only for the fusermount3 wrapper (mounting through the host's
+  # fusermount3; see build-aux/flatpak/fusermount-wrapper.sh).
+  - --talk-name=org.freedesktop.Flatpak
+  # System tray icon (StatusNotifierItem).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Keyring, when the Secret portal is missing.
+  - --talk-name=org.freedesktop.secrets
+  # Mount folders are chosen freely under the home folder.
+  - --filesystem=home
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: rclone
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 rclone /app/bin/rclone
+      - install -Dm644 COPYING /app/share/licenses/rclone/COPYING
+    sources:
+      - type: archive
+        only-arches: [x86_64]
+        url: https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip
+        sha256: 349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702
+      - type: archive
+        only-arches: [aarch64]
+        url: https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-arm64.zip
+        sha256: 7e1e8d69654941b7b7df84ee74c5f7fb09cce7d5496947fb7bf16b55ff427d10
+      # The archives do not include the license.
+      - type: file
+        url: https://raw.githubusercontent.com/rclone/rclone/v1.75.2/COPYING
+        sha256: 8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04
+
+  - name: nuage
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/nuage/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo build --release --offline --locked -p nuaged -p nuage -p nuage-gtk
+      # Runs on the host (see the wrapper): linked statically, so that it
+      # does not depend on the host's libraries. The SDK has every static
+      # glibc library but libm.a, which the relay does not use (Rust's std
+      # always asks for -lm): an empty one stands in.
+      - mkdir -p target/relay-libs && ar rc target/relay-libs/libm.a
+      - >-
+        RUSTFLAGS="-C target-feature=+crt-static -L native=$PWD/target/relay-libs"
+        cargo build --release --offline --locked -p nuage-fuse-relay
+        --target "$(rustc -vV | sed -n 's/^host: //p')"
+        --target-dir target/relay
+      - install -Dm755 -t /app/bin target/release/nuaged target/release/nuage target/release/nuage-gtk
+      - install -Dm755 target/relay/*/release/nuage-fuse-relay /app/bin/nuage-fuse-relay
+      - install -Dm755 build-aux/flatpak/fusermount-wrapper.sh /app/bin/fusermount3
+      - install -Dm644 data/io.github.felixilgatto.Nuage.desktop -t /app/share/applications
+      - install -Dm644 data/io.github.felixilgatto.Nuage.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.felixilgatto.Nuage.svg -t /app/share/icons/hicolor/scalable/apps
+      - install -Dm644 data/icons/hicolor/symbolic/apps/io.github.felixilgatto.Nuage-symbolic.svg -t /app/share/icons/hicolor/symbolic/apps
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - build-dir
+          - .flatpak-builder
+          - .flatpak-cargo
+          - .claude
+          - .git
+          - poc
+          - images
+      - cargo-sources.json

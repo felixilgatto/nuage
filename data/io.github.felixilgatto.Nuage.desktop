@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nuage
+Comment=Your cloud storage as a regular folder
+Exec=nuage-gtk
+Icon=io.github.felixilgatto.Nuage
+Terminal=false
+Categories=Network;FileTransfer;GTK;
+Keywords=cloud;drive;google;sync;storage;mount;
+StartupNotify=true

@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NUAGE_RCLONE_VERSION: v1.75.2
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - name: Install FUSE
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fuse3 jq
+      - name: Build the tarball and the .deb
+        run: scripts/build-native.sh
+      - name: Smoke test in a clean container
+        run: |
+          docker run --rm --device /dev/fuse --cap-add SYS_ADMIN \
+            --security-opt apparmor:unconfined \
+            -v "$PWD/target/dist:/dist:ro" -v "$PWD/scripts:/scripts:ro" \
+            ubuntu:24.04 /scripts/smoke-native.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: target/dist/
+
+  flatpak:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: nuage.flatpak
+          manifest-path: build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+          cache: false
+          upload-artifact: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: nuage.flatpak
+
+  publish:
+    needs: [native, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Changelog of this version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The section "## [<version>]" of CHANGELOG.md, up to the next one.
+          awk -v v="$version" '
+            /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          cat notes.md
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Nuage ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag
