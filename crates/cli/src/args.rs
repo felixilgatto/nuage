@@ -117,7 +117,18 @@ pub enum AccountCommand {
     /// Rename an account.
     Rename { account: String, name: String },
     /// Sign in again after a token expired or was revoked.
-    Reconnect { account: String },
+    Reconnect {
+        account: String,
+        /// OAuth token JSON generated elsewhere with `rclone authorize`.
+        #[arg(long, value_name = "JSON", conflicts_with = "token_file")]
+        token: Option<String>,
+        /// File containing the OAuth token JSON.
+        #[arg(long, value_name = "F")]
+        token_file: Option<PathBuf>,
+        /// Print the sign-in link instead of opening a browser.
+        #[arg(long)]
+        no_browser: bool,
+    },
     /// Remove an account from this computer. Nothing is deleted in the cloud.
     Remove {
         account: String,
@@ -294,6 +305,8 @@ mod tests {
             "nuage account list",
             "nuage account rename Drive Work",
             "nuage account reconnect Drive",
+            "nuage account reconnect Drive --token-file t.json",
+            "nuage account reconnect Drive --no-browser",
             "nuage account remove Drive --yes --force",
             "nuage mount Drive",
             "nuage unmount Drive",

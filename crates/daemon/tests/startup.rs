@@ -20,6 +20,7 @@ fn missing_rclone_is_reported() {
         .env("XDG_DATA_HOME", home.join(".local/share"))
         .env("NUAGE_SOCKET", &socket)
         .env("NUAGE_RCLONE", dir.path().join("no-rclone"))
+        .env("NUAGE_KEYRING", "off")
         .env_remove("FLATPAK_ID")
         .output()
         .unwrap();

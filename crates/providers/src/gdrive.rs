@@ -48,9 +48,14 @@ impl Provider for GoogleDrive {
         }
         if let Some(token) = &input.token {
             params.push(("token".to_owned(), token.clone()));
-            // v1 mounts "My Drive" only: do not ask about shared drives.
-            params.push(("config_change_team_drive".to_owned(), "false".to_owned()));
         }
+        // Google Docs, Sheets, Slides… as web shortcuts that open in the
+        // browser (rclone's export format `link.html`).
+        if let Some(NativeDocPolicy::WebShortcut { export_formats }) = self.native_docs() {
+            params.push(("export_formats".to_owned(), export_formats));
+        }
+        // v1 mounts "My Drive" only: do not ask about shared drives.
+        params.push(("config_change_team_drive".to_owned(), "false".to_owned()));
         params
     }
 
@@ -98,6 +103,9 @@ mod tests {
         let params = GoogleDrive.config_params(&input);
         assert_eq!(params[0], ("scope".to_owned(), "drive".to_owned()));
         assert!(params.contains(&("client_id".to_owned(), "id".to_owned())));
+        assert!(params.contains(&("export_formats".to_owned(), "link.html".to_owned())));
+        assert!(params.contains(&("config_change_team_drive".to_owned(), "false".to_owned())));
+        assert!(!params.iter().any(|(k, _)| k == "token"));
         assert_eq!(GoogleDrive.rclone_backend(), "drive");
     }
 }

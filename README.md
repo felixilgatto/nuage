@@ -5,9 +5,9 @@
 
 **Your cloud storage as a regular folder on Linux: a GNOME app for the desktop, a command-line tool for servers.**
 
-> **Status: early development.** The daemon and the command-line tool can
-> mount a local folder (the test provider), pause and resume uploads and
-> report the sync state; Google Drive and the desktop app are not ready yet.
+> **Status: early development.** The daemon and the command-line tool mount
+> Google Drive and local folders, pause and resume uploads and report the
+> sync state. The desktop app is not ready yet.
 > Sections marked *(planned)* describe the intended behaviour.
 
 <!-- TODO: screenshot -->
@@ -28,7 +28,7 @@
 
 | Provider | Status | Quota | Share link | Trash |
 |---|---|---|---|---|
-| Google Drive ("My Drive") | planned for v1 | yes | yes | yes |
+| Google Drive ("My Drive") | in development | yes | yes | yes |
 | Local folder (tests) | in development | yes | no | no |
 | OneDrive, others | planned | | | |
 
@@ -126,10 +126,82 @@ The Flatpak manifest (`flatpak-builder`) comes later.
 Pick a provider, sign in, choose the folder: three screens. Google Drive
 first asks you to create your own OAuth client (see below).
 
-## Create your own Google OAuth client *(planned)*
+## Create your own Google OAuth client
 
-A step-by-step guide (Google Cloud project, Drive API, consent screen in
-*Production*, "Desktop app" credentials) will be written here.
+Google Drive needs an OAuth client of your own: rclone's shared client stops
+working in 2026, and a client shared by all Nuage users would need a costly
+Google audit. Creating yours takes about five minutes and is free. You do it
+once; your other Google accounts reuse it.
+
+1. **Create a project**: open <https://console.cloud.google.com/projectcreate>,
+   name it (e.g. "Nuage"), click **Create**, and make sure it is selected at
+   the top of the page.
+2. **Enable the Drive API**: open
+   <https://console.cloud.google.com/apis/library/drive.googleapis.com> and
+   click **Enable**.
+3. **Describe the app**: open <https://console.cloud.google.com/auth/branding>,
+   click **Get started**, give an app name (e.g. "Nuage for me") and your
+   e-mail address, choose **External** as audience, and finish.
+4. **Publish it**: open <https://console.cloud.google.com/auth/audience> and
+   click **Publish app**, then confirm. This matters: while the app is in
+   *Testing*, Google makes you sign in again every 7 days. Google does not
+   review a personal app; it only warns, when you sign in, that the app is
+   not verified (click **Advanced**, then **Go to …**: it is your own app).
+5. **Create the client**: open <https://console.cloud.google.com/auth/clients>,
+   click **Create client**, choose the type **Desktop app**, and create it.
+   Copy the **Client ID** and the **Client secret**.
+
+Nuage asks Google for access to your Drive files only (`drive` scope), no
+other Google service.
+
+## Connect Google Drive
+
+On a computer with a web browser:
+
+```sh
+nuage account add gdrive --client-id <client ID> --client-secret <client secret>
+```
+
+Your browser opens; sign in and allow access. The account is mounted at
+`~/Cloud/Google Drive` (choose another folder with `--mount-point`). Google
+Docs, Sheets and Slides appear as `.link.html` shortcuts that open in the
+browser.
+
+### On a server without a browser
+
+**With an SSH tunnel** (simplest): on the server, run the same command with
+`--no-browser`. It prints a link to a page served by the server on port
+53682. On your computer, open a tunnel, then open the link in your browser:
+
+```sh
+ssh -L 53682:localhost:53682 <server>     # on your computer, keep it open
+```
+
+**With a token made elsewhere** (fully scriptable): on any computer with a
+browser and [rclone](https://rclone.org/install/), run
+
+```sh
+rclone authorize drive <client ID> <client secret>
+```
+
+sign in, and copy the JSON it prints (between the arrows) into a file
+`token.json`. Then on the server:
+
+```sh
+nuage account add gdrive --client-id <client ID> --client-secret <client secret> \
+    --token-file token.json
+```
+
+If Google later asks you to sign in again (for example after you changed
+your password), run `nuage account reconnect "Google Drive"`, with the same
+options (`--no-browser` or `--token-file`).
+
+### Where your access is stored
+
+The sign-in tokens are in rclone's configuration. On a desktop, it is
+encrypted with a password kept in your keyring. On a server without a
+keyring, it is not encrypted but readable by your user only; `nuage status`
+says so.
 
 ## Flatpak permissions *(planned)*
 
@@ -154,6 +226,14 @@ Each permission and its reason will be listed here, in particular
 - **"mounting is not supported when running from snap"**: the rclone snap
   cannot mount folders. Install rclone from <https://rclone.org/install/>
   and set `NUAGE_RCLONE` to its path.
+- **A Google Doc opens in the wrong application** (e.g. Thunderbird): Docs,
+  Sheets and Slides are `.link.html` shortcuts, opened by your default
+  application for web pages. Make your browser that application, e.g.
+  `xdg-mime default firefox.desktop text/html` (or in Settings → Apps →
+  Default apps).
+- **Google asks you to sign in every week**: your OAuth app is still in
+  *Testing*; publish it (step 4 of the guide above), then run
+  `nuage account reconnect "Google Drive"`.
 - **The daemon log**: `journalctl --user -u nuaged`, or the daemon's standard
   error during development (`NUAGE_LOG=debug` for more detail).
 
@@ -169,10 +249,10 @@ Every command accepts `--json`. Exit codes:
 | 3 | daemon unreachable |
 | 4 | authentication required |
 
-Working so far: `status [--watch]`, `account add | list | rename | remove`,
-`mount`, `unmount`, `pause`, `resume`, `refresh`, `config get | set` and
-`daemon status | stop`. File commands (`ls`, `cp`…), exclusions, pins and
-Google sign-in answer "not implemented yet" (exit code 1). Run
+Working so far: `status [--watch]`, `account add | list | rename | reconnect
+| remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, `config get |
+set` and `daemon status | stop`. File commands (`ls`, `cp`…), exclusions and
+pins answer "not implemented yet" (exit code 1). Run
 `nuage --help` for the full list.
 
 Settings (`nuage config get`, `nuage config set <key> <value>`):

@@ -25,7 +25,9 @@ mod files;
 mod mounts;
 mod paths;
 mod pins;
+mod secrets;
 mod settings;
+mod signin;
 mod status;
 mod units;
 mod uploads;
@@ -89,6 +91,10 @@ pub(crate) struct Inner {
     state: Mutex<State>,
     rcd: Mutex<RcdState>,
     background: std::sync::Mutex<Option<JoinHandle<()>>>,
+    /// The browser sign-in in progress, if any (rclone runs one at a time).
+    sign_in: Mutex<Option<signin::PendingSignIn>>,
+    /// `rclone.conf` is encrypted with a password from the keyring.
+    config_encrypted: std::sync::atomic::AtomicBool,
     exclusions: ExclusionManager,
     files: FileService,
     pins: PinManager,
@@ -198,6 +204,8 @@ impl Engine {
                     last_start: None,
                 }),
                 background: std::sync::Mutex::new(None),
+                sign_in: Mutex::new(None),
+                config_encrypted: std::sync::atomic::AtomicBool::new(false),
                 exclusions: ExclusionManager::default(),
                 files: FileService::default(),
                 pins: PinManager::default(),
@@ -307,15 +315,21 @@ impl Engine {
             Command::Status => Ok(Reply::Status(inner.poll_status().await)),
             Command::ListProviders => Ok(Reply::Providers(inner.registry.infos())),
             Command::AccountList => Ok(Reply::Accounts(inner.list_accounts().await)),
-            Command::AccountAdd(args) => inner.add_account(args).await.map(Reply::Account),
+            Command::AccountAdd(args) => inner.add_account(args).await,
             Command::AccountRename { account, name } => inner
                 .rename_account(&account, &name)
                 .await
                 .map(Reply::Account),
-            Command::AccountReconnect { account } => inner
-                .reconnect_account(&account)
-                .await
-                .map(|()| Reply::Done),
+            Command::AccountReconnect { account, token } => {
+                inner.reconnect_account(&account, token).await
+            }
+            Command::SignInWait { session } => {
+                inner.wait_sign_in(&session).await.map(Reply::Account)
+            }
+            Command::SignInCancel { session } => {
+                inner.cancel_sign_in(&session).await.map(|()| Reply::Done)
+            }
+
             Command::AccountRemove { account, force } => inner
                 .remove_account(&account, force)
                 .await
@@ -409,6 +423,20 @@ impl Inner {
 
     async fn start_rcd(&self) -> Result<()> {
         let mut rcd = self.rcd.lock().await;
+        let rclone = rcd.supervisor.config().rclone_path.clone();
+        let protection = secrets::protect(
+            &self.paths.rclone_config,
+            &rclone,
+            secrets::keyring_enabled(),
+        )
+        .await?;
+        let password = match protection {
+            secrets::Protection::Encrypted(p) => Some(p),
+            secrets::Protection::Plain => None,
+        };
+        self.config_encrypted
+            .store(password.is_some(), std::sync::atomic::Ordering::Relaxed);
+        rcd.supervisor.set_config_password(password);
         rcd.last_start = Some(Instant::now());
         let client = rcd.supervisor.start().await?;
         rcd.client = Some(client);
@@ -455,6 +483,7 @@ impl Inner {
             n += 1;
             self.check_rcd().await;
             self.release_uploads().await;
+            self.expire_sign_in().await;
             if n % 2 == 0 {
                 self.poll_status().await;
             }

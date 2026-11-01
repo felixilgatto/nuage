@@ -12,6 +12,6 @@ mod types;
 pub use client::{RcClient, RcError};
 pub use supervisor::{RcdConfig, RcdSupervisor};
 pub use types::{
-    About, ConfigOutcome, CoreVersion, DiskCache, FsInfo, MountInfo, MountOpt, MountRequest,
-    QueueItem, VfsOpt, VfsStats,
+    About, ConfigJob, ConfigOutcome, ConfigStep, CoreVersion, DiskCache, FsInfo, MountInfo,
+    MountOpt, MountRequest, OAuthStatus, QueueItem, VfsOpt, VfsStats,
 };

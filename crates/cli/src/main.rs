@@ -241,16 +241,7 @@ async fn run(cli: &Cli) -> Result<(), Failure> {
 async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Failure> {
     match command {
         AccountCommand::Add(add) => {
-            let token = match (&add.token, &add.token_file) {
-                (Some(token), _) => Some(token.clone()),
-                (None, Some(file)) => Some(
-                    std::fs::read_to_string(file)
-                        .map_err(|e| usage(format!("Cannot read {}: {e}", file.display())))?
-                        .trim()
-                        .to_owned(),
-                ),
-                (None, None) => None,
-            };
+            let token = read_token(&add.token, &add.token_file)?;
             // The daemon does not share our working directory.
             let mount_point = add
                 .mount_point
@@ -268,9 +259,9 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                 no_browser: add.no_browser,
                 params: add.params.iter().cloned().collect(),
             };
-            let Reply::Account(a) = request(cli, Command::AccountAdd(args)).await? else {
-                return Err(unexpected());
-            };
+            let mut client = connect(cli).await?;
+            let reply = client.request(Command::AccountAdd(args)).await??;
+            let a = finish_sign_in(cli, client, reply, add.no_browser).await?;
             if cli.json {
                 print_json(&a);
             } else {
@@ -325,15 +316,26 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
             }
             Ok(())
         }
-        AccountCommand::Reconnect { account: name } => {
-            request(
-                cli,
-                Command::AccountReconnect {
+        AccountCommand::Reconnect {
+            account: name,
+            token,
+            token_file,
+            no_browser,
+        } => {
+            let token = read_token(token, token_file)?;
+            let mut client = connect(cli).await?;
+            let reply = client
+                .request(Command::AccountReconnect {
                     account: account(name),
-                },
-            )
-            .await?;
-            done(cli, &format!("Reconnected \"{name}\"."));
+                    token,
+                })
+                .await??;
+            let a = finish_sign_in(cli, client, reply, *no_browser).await?;
+            if cli.json {
+                print_json(&a);
+            } else {
+                println!("Reconnected \"{}\".", a.display_name);
+            }
             Ok(())
         }
         AccountCommand::Remove {
@@ -361,6 +363,81 @@ async fn account_command(cli: &Cli, command: &AccountCommand) -> Result<(), Fail
                 ),
             );
             Ok(())
+        }
+    }
+}
+
+fn read_token(
+    token: &Option<String>,
+    token_file: &Option<std::path::PathBuf>,
+) -> Result<Option<String>, Failure> {
+    Ok(match (token, token_file) {
+        (Some(token), _) => Some(token.clone()),
+        (None, Some(file)) => Some(
+            std::fs::read_to_string(file)
+                .map_err(|e| usage(format!("Cannot read {}: {e}", file.display())))?
+                .trim()
+                .to_owned(),
+        ),
+        (None, None) => None,
+    })
+}
+
+/// Whether a web browser can be opened here.
+fn can_open_browser() -> bool {
+    let has = |v: &str| std::env::var_os(v).is_some_and(|x| !x.is_empty());
+    (has("DISPLAY") || has("WAYLAND_DISPLAY")) && !has("SSH_CONNECTION")
+}
+
+/// When the daemon asks for a sign-in in a browser: shows the link (on
+/// stderr, so that `--json` output stays one document), opens it if it can,
+/// and waits. Ctrl-C cancels the sign-in.
+async fn finish_sign_in(
+    cli: &Cli,
+    mut client: Client,
+    reply: Reply,
+    no_browser: bool,
+) -> Result<nuage_core::Account, Failure> {
+    let sign_in = match reply {
+        Reply::Account(a) => return Ok(a),
+        Reply::SignIn(sign_in) => sign_in,
+        _ => return Err(unexpected()),
+    };
+    eprintln!(
+        "To finish, sign in with your web browser at:\n\n    {}\n",
+        sign_in.url
+    );
+    if !no_browser && can_open_browser() {
+        let opened = std::process::Command::new("xdg-open")
+            .arg(&sign_in.url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if opened {
+            eprintln!("Your browser should open. If it does not, open the link above.");
+        }
+    } else {
+        eprintln!(
+            "This page is served by the machine running Nuage, on port 53682.\n\
+             If that is a server, open a tunnel from your computer first:\n\n    \
+             ssh -L 53682:localhost:53682 <server>\n\n\
+             then open the link in your computer's browser."
+        );
+    }
+    eprintln!("Waiting for the sign-in (Ctrl-C to cancel)…");
+
+    let session = sign_in.session.clone();
+    tokio::select! {
+        reply = client.request(Command::SignInWait { session: sign_in.session }) => {
+            match reply?? {
+                Reply::Account(a) => Ok(a),
+                _ => Err(unexpected()),
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            let _ = request(cli, Command::SignInCancel { session }).await;
+            Err(nuage_core::Error::AuthRequired("Sign-in cancelled.".to_owned()).into())
         }
     }
 }

@@ -9,18 +9,32 @@ use std::io::Read;
 use serde_json::{Map, Value};
 
 use nuage_core::{
-    Account, AccountAddArgs, AccountId, AuthSpec, CustomClient, Error, Event, Result, SetupInput,
-    SyncState,
+    Account, AccountAddArgs, AccountId, AuthSpec, CustomClient, Error, Event, Reply, Result,
+    SetupInput, SyncState,
 };
+use nuage_rclone::RcClient;
 
-use crate::Inner;
 use crate::config::AccountRecord;
 use crate::mounts::{remote_fs, validate_mount_point};
+use crate::signin::{BROWSER_QUESTION, SignInKind};
+use crate::{Inner, State};
 
 fn random_id() -> Result<String> {
     let mut buf = [0u8; 4];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// The `config_*` parameters, which answer rclone's configuration questions.
+fn config_answers(parameters: &Map<String, Value>) -> Vec<(String, String)> {
+    parameters
+        .iter()
+        // Never answer the sign-in questions themselves again.
+        .filter(|(k, _)| {
+            k.starts_with("config_") && *k != "config_refresh_token" && *k != BROWSER_QUESTION
+        })
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+        .collect()
 }
 
 fn check_name(name: &str) -> Result<()> {
@@ -67,7 +81,10 @@ impl Inner {
 
     /// Adds an account following its provider's `AuthSpec`, then mounts it.
     /// Nothing is kept if any step fails.
-    pub(crate) async fn add_account(&self, args: AccountAddArgs) -> Result<Account> {
+    ///
+    /// Replies [`Reply::Account`], or [`Reply::SignIn`] when the user must
+    /// sign in in a browser first (see [`crate::signin`]).
+    pub(crate) async fn add_account(&self, args: AccountAddArgs) -> Result<Reply> {
         let provider = self.registry.get(&args.provider).ok_or_else(|| {
             let known: Vec<_> = self.registry.iter().map(|p| p.id()).collect();
             Error::InvalidArgument(format!(
@@ -106,13 +123,14 @@ impl Inner {
             &others,
         )?;
 
-        let input = SetupInput {
+        let mut input = SetupInput {
             name: name.clone(),
             token: args.token,
             client_id: args.client_id,
             client_secret: args.client_secret,
             credentials: args.params,
         };
+        let mut sign_in = false;
         match provider.auth() {
             AuthSpec::None => {}
             AuthSpec::Credentials { fields } => {
@@ -130,6 +148,29 @@ impl Inner {
                 }
             }
             AuthSpec::OAuthBrowser { custom_client } => {
+                // The client of an existing account of the same provider is
+                // reused: a second account does not ask for it again.
+                if input.client_id.is_none() && custom_client != CustomClient::Unsupported {
+                    let existing = st
+                        .config
+                        .accounts
+                        .iter()
+                        .find(|r| r.account.provider_id == provider.id())
+                        .map(|r| r.account.remote_name.clone());
+                    if let Some(remote) = existing
+                        && let Ok(stored) = rc.config_get(&remote).await
+                    {
+                        let get = |k: &str| {
+                            stored
+                                .get(k)
+                                .and_then(Value::as_str)
+                                .filter(|v| !v.is_empty())
+                                .map(str::to_owned)
+                        };
+                        input.client_id = get("client_id");
+                        input.client_secret = get("client_secret");
+                    }
+                }
                 if custom_client == CustomClient::Required
                     && (input.client_id.is_none() || input.client_secret.is_none())
                 {
@@ -139,10 +180,8 @@ impl Inner {
                     )));
                 }
                 if input.token.is_none() {
-                    return Err(Error::not_implemented(format!(
-                        "signing in to {} from Nuage; for now, create a token with `rclone authorize` and pass it with --token-file",
-                        provider.display_name()
-                    )));
+                    self.check_no_sign_in().await?;
+                    sign_in = true;
                 }
             }
         }
@@ -159,15 +198,21 @@ impl Inner {
             // The token is final: do not ask rclone to refresh it in a browser.
             parameters.insert("config_refresh_token".into(), "false".into());
         }
+        if sign_in {
+            // Nuage shows the page; rclone must not try to open a browser.
+            parameters.insert("config_auth_no_browser".into(), "true".into());
+        }
         let outcome = rc
             .config_create(&remote_name, provider.rclone_backend(), &parameters)
             .await;
         let failure = match &outcome {
             Ok(o) if !o.error.is_empty() => Some(o.error.clone()),
+            Ok(o) if sign_in && o.pending_question() == Some(BROWSER_QUESTION) => None,
             Ok(o) if !o.is_complete() => Some(format!(
                 "rclone still asks \"{}\"",
                 o.pending_question().unwrap_or(&o.state)
             )),
+            Ok(_) if sign_in => Some("rclone did not ask to sign in".to_owned()),
             Ok(_) => None,
             Err(e) => Some(e.to_string()),
         };
@@ -184,24 +229,46 @@ impl Inner {
             id,
             provider_id: provider.id().to_owned(),
             display_name: name,
-            remote_name,
+            remote_name: remote_name.clone(),
             mount_point,
             cache_limit: st.config.settings.default_cache_limit,
         };
+        if sign_in {
+            drop(st);
+            let state = outcome.map(|o| o.state).unwrap_or_default();
+            let answers = config_answers(&parameters);
+            let sign_in = self
+                .start_sign_in(&rc, &remote_name, &state, SignInKind::Add(account), answers)
+                .await?;
+            return Ok(Reply::SignIn(sign_in));
+        }
+        self.finish_add(&mut st, &rc, account)
+            .await
+            .map(Reply::Account)
+    }
+
+    /// Saves and mounts a new account whose remote exists; undoes everything
+    /// if that fails.
+    pub(crate) async fn finish_add(
+        &self,
+        st: &mut State,
+        rc: &RcClient,
+        account: Account,
+    ) -> Result<Account> {
         st.config.accounts.push(AccountRecord {
             account: account.clone(),
             paused: false,
             auto_mount: true,
         });
         let i = st.config.accounts.len() - 1;
-        let mounted = match self.save(&st) {
-            Ok(()) => self.mount_locked(&mut st, i).await,
+        let mounted = match self.save(st) {
+            Ok(()) => self.mount_locked(st, i).await,
             Err(e) => Err(e),
         };
         if let Err(e) = mounted {
             st.config.accounts.pop();
             st.runtime.remove(&account.id);
-            let _ = self.save(&st);
+            let _ = self.save(st);
             let _ = rc.config_delete(&account.remote_name).await;
             let _ = std::fs::remove_dir(&account.mount_point);
             let _ = std::fs::remove_dir(
@@ -240,19 +307,89 @@ impl Inner {
         Ok(account)
     }
 
-    pub(crate) async fn reconnect_account(&self, id: &AccountId) -> Result<()> {
-        let st = self.state.lock().await;
-        let i = st.resolve(id)?;
-        let account = &st.record(i).account;
-        match self.registry.get(&account.provider_id).map(|p| p.auth()) {
-            Some(AuthSpec::OAuthBrowser { .. }) => Err(Error::not_implemented(
-                "signing in again from Nuage; for now, remove the account and add it with a new token",
-            )),
-            _ => Err(Error::Unsupported(format!(
+    /// Signs in again: with `token`, at once; otherwise in a browser
+    /// ([`Reply::SignIn`]). The account is remounted to use the new token.
+    pub(crate) async fn reconnect_account(
+        &self,
+        id: &AccountId,
+        token: Option<String>,
+    ) -> Result<Reply> {
+        let rc = self.rc().await?;
+        let account = {
+            let st = self.state.lock().await;
+            st.record(st.resolve(id)?).account.clone()
+        };
+        let provider = self.registry.get(&account.provider_id);
+        let Some(provider) = provider.filter(|p| matches!(p.auth(), AuthSpec::OAuthBrowser { .. }))
+        else {
+            return Err(Error::Unsupported(format!(
                 "\"{}\" does not use a sign-in, there is nothing to reconnect.",
                 account.display_name
-            ))),
+            )));
+        };
+        let stored = rc.config_get(&account.remote_name).await?;
+        let get = |k: &str| {
+            stored
+                .get(k)
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+        };
+        let input = SetupInput {
+            name: account.display_name.clone(),
+            token: token.clone(),
+            client_id: get("client_id"),
+            client_secret: get("client_secret"),
+            credentials: Default::default(),
+        };
+        let mut parameters: Map<String, Value> = provider
+            .config_params(&input)
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+        if token.is_some() {
+            parameters.insert("config_refresh_token".into(), "false".into());
+            let outcome = rc.config_update(&account.remote_name, &parameters).await?;
+            if !outcome.error.is_empty() || !outcome.is_complete() {
+                return Err(Error::Rclone(format!(
+                    "Cannot use the new token: {}",
+                    if outcome.error.is_empty() {
+                        outcome
+                            .pending_question()
+                            .unwrap_or(&outcome.state)
+                            .to_owned()
+                    } else {
+                        outcome.error
+                    }
+                )));
+            }
+            return self.finish_reconnect(&account.id).await.map(Reply::Account);
         }
+
+        self.check_no_sign_in().await?;
+        parameters.insert("config_refresh_token".into(), "true".into());
+        parameters.insert("config_auth_no_browser".into(), "true".into());
+        let outcome = rc.config_update(&account.remote_name, &parameters).await?;
+        if outcome.pending_question() != Some(BROWSER_QUESTION) {
+            return Err(Error::Rclone(format!(
+                "rclone did not ask to sign in again ({}).",
+                if outcome.error.is_empty() {
+                    outcome.state
+                } else {
+                    outcome.error
+                }
+            )));
+        }
+        let sign_in = self
+            .start_sign_in(
+                &rc,
+                &account.remote_name,
+                &outcome.state,
+                SignInKind::Reconnect(account.id.clone()),
+                config_answers(&parameters),
+            )
+            .await?;
+        Ok(Reply::SignIn(sign_in))
     }
 
     /// Unmounts, then deletes the remote, the cache and the mount folder if

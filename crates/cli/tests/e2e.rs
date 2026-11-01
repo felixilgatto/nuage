@@ -109,6 +109,8 @@ impl TestEnv {
             .env("NUAGE_SOCKET", self.socket())
             .env("NUAGE_RCLONE", &self.rclone)
             .env("NUAGE_LOG", "debug")
+            // Never touch the keyring of the user running the tests.
+            .env("NUAGE_KEYRING", "off")
             .env_remove("FLATPAK_ID");
     }
 
@@ -378,6 +380,11 @@ fn account_lifecycle() {
         Duration::from_secs(20),
         |env| env.account_state("Local folder")["state"]["state"] == "up_to_date",
     );
+    // Without a keyring, rclone.conf is plain but private.
+    assert_eq!(env.status()["config_encrypted"], false);
+    use std::os::unix::fs::PermissionsExt;
+    let conf = std::fs::metadata(env.path("home/.config/nuage/rclone.conf")).unwrap();
+    assert_eq!(conf.permissions().mode() & 0o777, 0o600);
     let status = env.account_state("Local folder");
     assert_eq!(status["mounted"], true);
     assert!(status["quota"]["total"].as_u64().unwrap() > 0, "{status}");
@@ -594,4 +601,95 @@ fn user_folder_survives_an_rclone_crash() {
     env.wait_until("b.txt is uploaded", Duration::from_secs(20), |_| {
         std::fs::read_to_string(src.join("b.txt")).is_ok_and(|s| s == "b")
     });
+}
+
+/// `GET` over plain HTTP; returns the status line and the `Location` header.
+fn http_get(url: &str) -> (String, Option<String>) {
+    use std::io::{Read, Write};
+    let rest = url.strip_prefix("http://").unwrap();
+    let (host, path) = rest.split_once('/').unwrap();
+    let mut stream = std::net::TcpStream::connect(host).unwrap();
+    write!(
+        stream,
+        "GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let status = response.lines().next().unwrap_or_default().to_owned();
+    let location = response
+        .lines()
+        .find_map(|l| l.strip_prefix("Location: ").map(str::to_owned));
+    (status, location)
+}
+
+#[test]
+fn google_sign_in_can_be_cancelled() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nuage"));
+    env.apply_env(&mut cmd);
+    let mut child = cmd
+        .args([
+            "account",
+            "add",
+            "gdrive",
+            "--name",
+            "Drive",
+            "--client-id",
+            "nuage-test.apps.googleusercontent.com",
+            "--client-secret",
+            "secret",
+            "--no-browser",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // The CLI prints the sign-in link and waits.
+    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut text = String::new();
+    let mut url = None;
+    while !text.contains("Waiting for the sign-in") {
+        let mut line = String::new();
+        let n = std::io::BufRead::read_line(&mut stderr, &mut line).unwrap();
+        assert!(n > 0, "no sign-in link in:\n{text}{}", env.log());
+        if let Some(start) = line.find("http://127.0.0.1:53682/") {
+            url = Some(line[start..].trim().to_owned());
+        }
+        text.push_str(&line);
+    }
+    let url = url.expect("sign-in link");
+    assert!(text.contains("ssh -L 53682:localhost:53682"), "{text}");
+
+    // The link leads to Google's sign-in page with our client.
+    let (status, location) = http_get(&url);
+    assert!(status.contains(" 30"), "{status}");
+    let location = location.unwrap();
+    assert!(
+        location.starts_with("https://accounts.google.com/"),
+        "{location}"
+    );
+    assert!(location.contains("client_id=nuage-test.apps.googleusercontent.com"));
+
+    // One sign-in at a time.
+    let mut other = vec!["account", "add", "gdrive", "--name", "Other"];
+    other.extend(["--client-id", "a", "--client-secret", "b", "--no-browser"]);
+    assert_eq!(env.json_error(&other, 1), "busy");
+
+    // Ctrl-C cancels: nothing is kept.
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(4));
+    assert_eq!(env.json(&["account", "list"]), Value::Array(vec![]));
+    let conf =
+        std::fs::read_to_string(env.path("home/.config/nuage/rclone.conf")).unwrap_or_default();
+    assert!(!conf.contains("[nuage-"), "the remote is deleted:\n{conf}");
+    assert!(!env.path("home/Cloud/Drive").exists());
 }

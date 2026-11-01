@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::types::{
-    About, ConfigOutcome, CoreVersion, FsInfo, MountInfo, MountRequest, QueueItem, VfsStats,
+    About, ConfigJob, ConfigOutcome, ConfigStep, CoreVersion, FsInfo, MountInfo, MountRequest,
+    OAuthStatus, QueueItem, VfsStats,
 };
 
 /// Timeout of calls that should answer quickly (stats, queue, version).
@@ -162,6 +163,79 @@ impl RcClient {
             }),
         )
         .await
+    }
+
+    /// `config/update` with `continue`: answers the pending question of a
+    /// remote's configuration. With `background`, runs as an rc job (the
+    /// OAuth step blocks until the user signs in) and returns its id.
+    pub async fn config_continue(
+        &self,
+        name: &str,
+        state: &str,
+        result: &str,
+        background: bool,
+    ) -> Result<ConfigStep, RcError> {
+        let params = json!({
+            "name": name,
+            "parameters": {},
+            "opt": { "nonInteractive": true, "continue": true, "state": state, "result": result },
+            "_async": background,
+        });
+        if background {
+            #[derive(Deserialize)]
+            struct Job {
+                jobid: u64,
+            }
+            let job: Job = self
+                .call_with_timeout("config/update", &params, SHORT)
+                .await?;
+            Ok(ConfigStep::Job(job.jobid))
+        } else {
+            Ok(ConfigStep::Done(self.call("config/update", &params).await?))
+        }
+    }
+
+    /// `config/update` with plain parameters (e.g. a new token).
+    pub async fn config_update(
+        &self,
+        name: &str,
+        parameters: &serde_json::Map<String, Value>,
+    ) -> Result<ConfigOutcome, RcError> {
+        self.call(
+            "config/update",
+            &json!({
+                "name": name,
+                "parameters": parameters,
+                "opt": { "nonInteractive": true, "obscure": true },
+            }),
+        )
+        .await
+    }
+
+    /// `config/get`: the parameters of a remote, as stored.
+    pub async fn config_get(&self, name: &str) -> Result<serde_json::Map<String, Value>, RcError> {
+        self.call_with_timeout("config/get", &json!({ "name": name }), SHORT)
+            .await
+    }
+
+    /// `config/oauthstatus`: the sign-in URL while rclone's OAuth server runs.
+    pub async fn oauth_status(&self) -> Result<OAuthStatus, RcError> {
+        self.call_with_timeout("config/oauthstatus", &json!({}), SHORT)
+            .await
+    }
+
+    /// `config/oauthstop`: cancels a running OAuth sign-in.
+    pub async fn oauth_stop(&self) -> Result<(), RcError> {
+        self.call_with_timeout::<_, IgnoredAny>("config/oauthstop", &json!({}), SHORT)
+            .await
+            .map(drop)
+    }
+
+    /// `job/status` of a configuration job started by
+    /// [`config_continue`](Self::config_continue).
+    pub async fn config_job(&self, id: u64) -> Result<ConfigJob, RcError> {
+        self.call_with_timeout("job/status", &json!({ "jobid": id }), SHORT)
+            .await
     }
 
     /// `config/delete`.

@@ -34,8 +34,21 @@ pub enum Command {
         account: AccountId,
         name: String,
     },
+    /// Signs in again. With `token`, uses it; otherwise starts a sign-in
+    /// in the browser and replies [`Reply::SignIn`].
     AccountReconnect {
         account: AccountId,
+        #[serde(default)]
+        token: Option<String>,
+    },
+    /// Waits until the sign-in started by `AccountAdd` or `AccountReconnect`
+    /// finishes; replies [`Reply::Account`].
+    SignInWait {
+        session: String,
+    },
+    /// Cancels a sign-in; nothing is kept.
+    SignInCancel {
+        session: String,
     },
     AccountRemove {
         account: AccountId,
@@ -151,6 +164,9 @@ pub struct AccountAddArgs {
 pub enum Reply {
     /// The command succeeded and has nothing to return.
     Done,
+    /// A sign-in in the browser started: open `url`, then send
+    /// [`Command::SignInWait`].
+    SignIn(SignIn),
     Status(StatusReport),
     DaemonInfo(DaemonInfo),
     Providers(Vec<ProviderInfo>),
@@ -196,6 +212,16 @@ pub struct AccountStatus {
     pub quota: Option<Quota>,
     /// Size of the account's local cache, in bytes.
     pub cache_used: u64,
+}
+
+/// A sign-in in progress.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignIn {
+    pub session: String,
+    /// Page to open in a web browser. It is served by rclone on
+    /// `127.0.0.1:53682` of the machine running the daemon (on a server,
+    /// reach it with `ssh -L 53682:localhost:53682`).
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

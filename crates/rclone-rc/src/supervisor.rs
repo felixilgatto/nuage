@@ -35,18 +35,35 @@ pub struct RcdConfig {
 /// rcd listens on 127.0.0.1 with a random port and random credentials, never
 /// with `--rc-no-auth`. The credentials go through the environment, not the
 /// command line, so other users cannot read them with `ps`.
-#[derive(Debug)]
 pub struct RcdSupervisor {
     config: RcdConfig,
+    /// `RCLONE_CONFIG_PASS`, when `rclone.conf` is encrypted.
+    config_password: Option<String>,
     child: Option<Child>,
     client: Option<RcClient>,
     version: Option<String>,
+}
+
+impl std::fmt::Debug for RcdSupervisor {
+    // The configuration password must never reach a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RcdSupervisor")
+            .field("config", &self.config)
+            .field(
+                "config_password",
+                &self.config_password.as_ref().map(|_| "<redacted>"),
+            )
+            .field("running", &self.child.is_some())
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RcdSupervisor {
     pub fn new(config: RcdConfig) -> Self {
         Self {
             config,
+            config_password: None,
             child: None,
             client: None,
             version: None,
@@ -55,6 +72,11 @@ impl RcdSupervisor {
 
     pub fn config(&self) -> &RcdConfig {
         &self.config
+    }
+
+    /// Password of an encrypted `rclone.conf`, used from the next start.
+    pub fn set_config_password(&mut self, password: Option<String>) {
+        self.config_password = password;
     }
 
     /// Starts rcd and waits until `core/version` answers.
@@ -106,10 +128,15 @@ impl RcdSupervisor {
             .env("RCLONE_RC_PASS", &pass)
             // Never let rclone open a browser or read a terminal by itself.
             .env_remove("RCLONE_RC_NO_AUTH")
+            .env_remove("RCLONE_PASSWORD_COMMAND")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        match &self.config_password {
+            Some(password) => command.env("RCLONE_CONFIG_PASS", password),
+            None => command.env_remove("RCLONE_CONFIG_PASS"),
+        };
         let mut child = command.spawn().map_err(|e| {
             Error::Rclone(format!(
                 "cannot run {}: {e}",
@@ -271,6 +298,20 @@ fn random_hex(bytes: usize) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_hides_the_password() {
+        let mut rcd = RcdSupervisor::new(RcdConfig {
+            rclone_path: "rclone".into(),
+            config_path: "rclone.conf".into(),
+            cache_dir: "cache".into(),
+            pid_file: None,
+        });
+        rcd.set_config_password(Some("hunter2".into()));
+        let shown = format!("{rcd:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(shown.contains("redacted"));
+    }
 
     #[test]
     fn random_hex_is_random() {

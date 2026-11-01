@@ -54,6 +54,8 @@ toml = "1"
 rustix = { version = "1", features = ["process", "fs"] }
 fuser = "0.18"
 libc = "0.2"
+# Keyring: Secret portal in the Flatpak, Secret Service natively.
+oo7 = { version = "0.5", default-features = false, features = ["tokio", "native_crypto"] }
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "time", "fs", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

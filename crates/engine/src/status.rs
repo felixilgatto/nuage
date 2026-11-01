@@ -177,7 +177,9 @@ impl Inner {
             state: SyncState::aggregate(accounts.iter().map(|a| &a.state)),
             cache_used: accounts.iter().map(|a| a.cache_used).sum(),
             accounts,
-            config_encrypted: false,
+            config_encrypted: self
+                .config_encrypted
+                .load(std::sync::atomic::Ordering::Relaxed),
         };
 
         let out_of_space: Vec<_> = st

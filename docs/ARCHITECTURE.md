@@ -174,6 +174,39 @@ background task ticks every second:
   reported by `vfs/stats`), and the mount folder if empty. Refused while
   uploads are pending, unless `--force`.
 
+### Signing in (OAuth)
+
+1. `account add` (or `account reconnect`) creates (or updates) the remote
+   with `config_auth_no_browser`: rclone stops at its question "use a web
+   browser?" (`config_is_local`).
+2. Answering "yes" as a background rc job starts rclone's OAuth server on
+   `127.0.0.1:53682`. The daemon replies `SignIn { session, url }` with the
+   page from `config/oauthstatus`.
+3. The client shows the link (and opens it when a browser is available),
+   then sends `SignInWait`. On a server the user reaches the page through
+   `ssh -L 53682:localhost:53682`.
+4. When the job ends, the account is saved and mounted (or remounted to use
+   the new token). `SignInCancel` (Ctrl-C in the CLI) stops the OAuth server
+   with `config/oauthstop` and deletes the new remote.
+
+One sign-in at a time (rclone has one OAuth server); an abandoned one is
+cancelled after 10 minutes. With `--token`, no browser is involved: one
+`config/create` (or `config/update`) with `config_refresh_token=false`.
+A second account of a provider reuses the OAuth client of the first one
+(read back with `config/get`).
+
+### Secrets
+
+`rclone.conf` holds the tokens. At startup the daemon looks for a password
+in the keyring (`oo7`: the Secret portal in the Flatpak, the Secret Service
+natively), creating a random one if needed, encrypts a plain
+`rclone.conf` once (`rclone config encryption set --password-command`), and
+passes it to rcd as `RCLONE_CONFIG_PASS`. Without a keyring (headless, or
+`NUAGE_KEYRING=off`), the file stays plain in mode `0600` and
+`StatusReport.config_encrypted` is `false`. An encrypted file without its
+keyring stops the daemon with a message. The password is never logged
+(`RcdSupervisor`'s `Debug` hides it).
+
 ### Pause
 
 Every mount uses `WriteBack=8760h`, so rclone never uploads by itself.

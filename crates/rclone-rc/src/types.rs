@@ -58,6 +58,39 @@ impl ConfigOutcome {
     }
 }
 
+/// What [`RcClient::config_continue`](crate::RcClient::config_continue)
+/// returns.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigStep {
+    Done(ConfigOutcome),
+    /// Running as rc job `id`.
+    Job(u64),
+}
+
+/// `job/status` of a configuration job.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct ConfigJob {
+    #[serde(default)]
+    pub finished: bool,
+    #[serde(default)]
+    pub success: bool,
+    /// Error of the job, empty if none.
+    #[serde(default)]
+    pub error: String,
+    /// The configuration outcome once finished.
+    #[serde(default)]
+    pub output: Option<ConfigOutcome>,
+}
+
+/// Answer of `config/oauthstatus`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct OAuthStatus {
+    /// `"running"` or `"stopped"`.
+    pub status: String,
+    #[serde(rename = "authUrl", default)]
+    pub auth_url: Option<String>,
+}
+
 /// Answer of `operations/fsinfo`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct FsInfo {
