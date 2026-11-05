@@ -38,7 +38,7 @@ These rules settle cases the brief does not cover.
 - **Minimalist interface.** As few visible screens, choices and settings as possible. Anything with a good default is not asked and stays in the settings. No welcome screen, tutorial or summary.
 - **Provider independence.** Everything that depends on a provider is in its module. Interfaces adapt to the provider's **capabilities**, never to its name.
 - **Native GNOME** on the desktop: GTK4 + libadwaita, GNOME HIG, Flathub quality guidelines.
-- **Sandbox as closed as possible.** Flatpak permissions are minimal and each one is justified in the README.
+- **Sandbox as closed as possible.** Flatpak permissions are minimal and each one is justified in `docs/INSTALL.md`.
 
 ## Scope by version
 

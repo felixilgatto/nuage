@@ -70,9 +70,11 @@ Check every item; edit only what is out of date.
    `for tests` (the `local` provider) or `planned (vX)` (brief only). Capability columns come from `static_capabilities()`; say
    in one line under the table that Nuage hides actions a provider does not
    support.
-2. **`README.md`**: the single "Providers:" line under "What it does" names
-   the available providers, then "… later" for planned ones, and links to
-   `docs/PROVIDERS.md`. Do not add a table to the README.
+2. **`README.md`**: the single providers sentence under the tagline names
+   the available providers, then the preview ones, and links to
+   `docs/PROVIDERS.md`. Do not add a table to the README. The sign-in
+   list in `docs/INSTALL.md` ("Get started") names the providers that use
+   a form.
 3. **Client guides** (`docs/GOOGLE_OAUTH.md`, and one per provider whose
    `client_guide()` is not empty, named `docs/<PROVIDER>_OAUTH.md`): the
    numbered steps match `client_guide()` one for one, same order, same URLs.
