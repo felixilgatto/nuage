@@ -144,7 +144,8 @@ which installed copies update.
 `scripts/check-release.sh` (run by CI) checks that `Cargo.toml`, the
 metainfo and the changelog agree; the release also checks the tag.
 
-**Once, before the first release:**
+**Once, before the first release** (done on 2026-11-05: the key's
+fingerprint is `9833 536F 5965 1DC9 E942  1FCF DFD2 049E 198F 83FB`):
 
 - The Flatpak repository's signing key: a GPG key without passphrase, kept
   only as the `FLATPAK_SIGNING_KEY` secret of the repository (and a backup
@@ -159,9 +160,13 @@ metainfo and the changelog agree; the release also checks the tag.
   rm -rf "$GNUPGHOME"
   ```
 
-- GitHub Pages published by GitHub Actions:
-  `gh api -X POST repos/felixilgatto/nuage/pages -f build_type=workflow`
-  (or Settings → Pages → Source: GitHub Actions).
+- GitHub Pages published by GitHub Actions, from `v*` tags too:
+
+  ```sh
+  gh api -X POST repos/felixilgatto/nuage/pages -f build_type=workflow
+  gh api -X POST repos/felixilgatto/nuage/environments/github-pages/deployment-branch-policies \
+      -f name='v*' -f type=tag
+  ```
 
 ## Contributing
 
