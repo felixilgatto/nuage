@@ -851,8 +851,12 @@ fn exclusions() {
     );
     env.json(&["exclude", "add", "Ex", "--glob", "*.bak", "--yes"]);
     env.json(&["resume", "Ex"]);
-    env.wait_until("pending.txt is uploaded", Duration::from_secs(20), |_| {
+    // Uploaded, and no longer counted as pending: the file can reach the
+    // cloud a moment before the daemon's count drops, and a rule change
+    // in between is "busy".
+    env.wait_until("pending.txt is uploaded", Duration::from_secs(20), |env| {
         src.join("pending.txt").exists()
+            && env.account_state("Ex")["state"]["state"] == "up_to_date"
     });
 
     // Included again: the local file goes to the cloud, the remote one shows.
