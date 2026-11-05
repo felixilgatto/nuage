@@ -1,170 +1,170 @@
 # Brief — Nuage
 
-**Client de stockage cloud pour Linux : un démon Rust qui pilote rclone, une application GNOME (Flatpak) pour le bureau et une CLI pour les serveurs headless.**
+**Cloud storage client for Linux: a Rust daemon that drives rclone, a GNOME app (Flatpak) for the desktop and a CLI for headless servers.**
 
-## En bref
+## In short
 
-Sous Linux, monter un Google Drive ou un OneDrive est pénible : rclone sait tout faire mais n'a pas d'interface simple. Nuage :
+On Linux, mounting a Google Drive or a OneDrive is painful: rclone can do everything but has no simple interface. Nuage:
 
-- monte chaque compte cloud dans un dossier choisi par l'utilisateur, visible dans Nautilus ;
-- sur le bureau, affiche l'état de la synchronisation et l'espace utilisé dans une icône de la barre système ;
-- offre **un seul navigateur de fichiers, identique pour tous les fournisseurs** ;
-- se met en route en **quelques écrans guidés** (4 pour un premier compte Google, 3 ensuite), puis vit dans la barre système ;
-- **s'installe et s'utilise entièrement en ligne de commande** sur un serveur headless accessible en SSH, y compris par un agent comme Claude Code.
+- mounts each cloud account in a folder chosen by the user, visible in Nautilus;
+- on the desktop, shows the sync status and the space used in a system tray icon;
+- offers **a single file browser, identical for all providers**;
+- is set up in **a few guided screens** (4 for a first Google account, 3 after that), then lives in the system tray;
+- **is installed and used entirely from the command line** on a headless server reached over SSH, including by an agent such as Claude Code.
 
-v1 : Google Drive, **public dès la v1**. L'architecture est multi-fournisseurs dès le départ.
+v1: Google Drive, **public from v1**. The architecture is multi-provider from the start.
 
-**État au 2026-11-05** : v1, v1.1 et v2 (jalons 1 à 14) sont faits, sans publication pour l'instant (voir [Jalons](#jalons)). Fournisseurs disponibles : Google Drive (avec les Drive partagés), OneDrive, Nextcloud, WebDAV, stockage S3 (essayés avec de vrais comptes ou serveurs). En *preview* (pas encore essayés avec un vrai compte) : Dropbox, pCloud, et Proton Drive (feature hors `default`). `local` pour les tests.
+**Status as of 2026-11-05**: v1, v1.1 and v2 (milestones 1 to 14) are done, not published for now (see [Milestones](#milestones)). Available providers: Google Drive (with shared drives), OneDrive, Nextcloud, WebDAV, S3 storage (tried with real accounts or servers). In *preview* (not yet tried with a real account): Dropbox, pCloud, and Proton Drive (feature outside `default`). `local` for tests.
 
-## Consignes pour Claude Code
+## Instructions for Claude Code
 
-1. **Ordre de travail** : suivre les [jalons](#jalons) dans l'ordre. Le jalon 1 (preuve que FUSE fonctionne depuis le Flatpak) passe avant tout le reste ; s'il échoue, s'arrêter et en parler.
-2. **Git** : le dépôt est `git@github.com:felixilgatto/nuage.git` (https://github.com/felixilgatto/nuage), créé **manuellement** par Felix. Ne pas créer d'autre dépôt distant. Commits et push uniquement sur demande.
-3. **Langue** : ce brief est en français, mais **tout ce qui est produit est en anglais** : code, identifiants (y compris les variantes d'enum), commentaires, messages de commit, README, `docs/`, chaînes de l'interface et de la CLI. Les chaînes de l'UI passent par gettext pour pouvoir être traduites plus tard.
-4. **Modularité** : l'architecture modulaire (voir [Architecture](#architecture)) est en place dès le premier commit, même avec un seul fournisseur.
-5. **Licence MIT** : fichier `LICENSE` à la racine, `license = "MIT"` dans chaque `Cargo.toml`, `<project_license>MIT</project_license>` dans le `metainfo.xml`. `cargo-deny` n'accepte que des licences compatibles MIT (MIT, Apache-2.0, BSD, ISC, Zlib ; MPL-2.0 au cas par cas ; GPL/AGPL refusées). rclone est sous MIT, on peut donc l'embarquer.
-6. **Noms** : application **Nuage** ; binaires `nuaged` (démon), `nuage` (CLI), `nuage-gtk` (application de bureau) ; crates `nuage-*` ; identifiant Flatpak **`io.github.felixilgatto.Nuage`**.
-7. **Points à vérifier** : les hypothèses techniques non confirmées sont regroupées dans [À vérifier](#à-vérifier). Les vérifier au moment indiqué plutôt que de les supposer vraies.
+1. **Order of work**: follow the [milestones](#milestones) in order. Milestone 1 (proof that FUSE works from the Flatpak) comes before everything else; if it fails, stop and discuss it.
+2. **Git**: the repository is `git@github.com:felixilgatto/nuage.git` (https://github.com/felixilgatto/nuage), created **manually** by Felix. Do not create any other remote repository. Commit and push only on request.
+3. **Language**: **everything in the repository is in English**, including this brief: code, identifiers (including enum variants), comments, commit messages, README, `docs/`, UI and CLI strings. UI strings go through gettext so they can be translated later.
+4. **Modularity**: the modular architecture (see [Architecture](#architecture)) is in place from the first commit, even with a single provider.
+5. **MIT license**: `LICENSE` file at the root, `license = "MIT"` in every `Cargo.toml`, `<project_license>MIT</project_license>` in the `metainfo.xml`. `cargo-deny` only accepts MIT-compatible licenses (MIT, Apache-2.0, BSD, ISC, Zlib; MPL-2.0 case by case; GPL/AGPL refused). rclone is under MIT, so it can be bundled.
+6. **Names**: application **Nuage**; binaries `nuaged` (daemon), `nuage` (CLI), `nuage-gtk` (desktop app); crates `nuage-*`; Flatpak ID **`io.github.felixilgatto.Nuage`**.
+7. **Points to verify**: unconfirmed technical assumptions are grouped in [To verify](#to-verify). Verify them at the indicated time rather than assuming they are true.
 
-## Principes
+## Principles
 
-Ces règles tranchent les cas non prévus par le brief.
+These rules settle cases the brief does not cover.
 
-- **On ne réécrit pas de moteur de sync.** rclone fait le montage, le cache, l'OAuth et les transferts. Nuage est une interface au-dessus de son API de contrôle (rc). Seule exception : le système de fichiers superposé `nuage-fs` (exclusions exactes en v1, épinglage hors ligne en v1.1).
-- **Un moteur, plusieurs interfaces.** Le moteur tourne dans un démon (`nuaged`). L'application GTK, l'icône de barre système et la CLI en sont des clients. **Tout ce que fait l'interface graphique est faisable en CLI**, à l'exception du navigateur graphique.
-- **Headless de première classe.** Sur un serveur sans écran, Nuage s'installe, se configure et s'utilise uniquement en ligne de commande, sans aucune étape interactive obligatoire.
-- **Public dès la v1.** Messages d'erreur compréhensibles par un non-technicien, avec l'action à faire ; README d'installation pas à pas.
-- **Fichiers uniquement.** Ni calendrier, ni contacts, ni mail, ni photos. Les scopes OAuth se limitent aux fichiers.
-- **Interface minimaliste.** Le moins d'écrans, de choix et de réglages visibles possible. Tout ce qui a un bon défaut n'est pas demandé et reste dans les réglages. Pas d'écran d'accueil, de tutoriel ni de récapitulatif.
-- **Indépendance vis-à-vis du fournisseur.** Tout ce qui dépend d'un fournisseur est dans son module. Les interfaces s'adaptent aux **capacités** du fournisseur, jamais à son nom.
-- **GNOME natif** sur le bureau : GTK4 + libadwaita, GNOME HIG, guidelines de qualité Flathub.
-- **Sandbox aussi fermé que possible.** Les permissions Flatpak sont minimales et chacune est justifiée dans le README.
+- **We do not rewrite a sync engine.** rclone does the mounting, the cache, OAuth and the transfers. Nuage is an interface on top of its remote control API (rc). Only exception: the overlay file system `nuage-fs` (exact exclusions in v1, offline pinning in v1.1).
+- **One engine, several interfaces.** The engine runs in a daemon (`nuaged`). The GTK app, the system tray icon and the CLI are its clients. **Everything the graphical interface does can be done from the CLI**, except the graphical browser.
+- **First-class headless.** On a server without a screen, Nuage is installed, configured and used only from the command line, with no mandatory interactive step.
+- **Public from v1.** Error messages understandable by a non-technical person, with the action to take; step-by-step installation README.
+- **Files only.** No calendar, contacts, mail or photos. OAuth scopes are limited to files.
+- **Minimalist interface.** As few visible screens, choices and settings as possible. Anything with a good default is not asked and stays in the settings. No welcome screen, tutorial or summary.
+- **Provider independence.** Everything that depends on a provider is in its module. Interfaces adapt to the provider's **capabilities**, never to its name.
+- **Native GNOME** on the desktop: GTK4 + libadwaita, GNOME HIG, Flathub quality guidelines.
+- **Sandbox as closed as possible.** Flatpak permissions are minimal and each one is justified in the README.
 
-## Périmètre par version
+## Scope by version
 
-| Fonctionnalité | v1 | v1.1 | v2 | Jamais |
+| Feature | v1 | v1.1 | v2 | Never |
 |---|---|---|---|---|
-| Google Drive (« Mon Drive ») | ✔ | | | |
-| Drive partagés (chacun un compte) | | | ✔ | |
-| « Partagés avec moi » (Google), SharePoint et OneDrive pro | | | plus tard | |
-| Fournisseur `local` (tests, CI) | ✔ | | | |
-| OneDrive (personnel) | | | ✔ | |
-| Nextcloud, WebDAV, stockage S3 | | | ✔ (ajoutés le 2026-11-05) | |
-| Dropbox, pCloud | | | preview (à essayer avec un vrai compte) | |
-| Proton Drive | | | preview, build opt-in (backend rclone en bêta) | |
-| Montage par compte, dossier au choix | ✔ | | | |
-| Démon `nuaged` + CLI `nuage` | ✔ | | | |
-| Installation headless (binaire natif, service systemd) | ✔ | | | |
-| Application GTK + icône de barre système (Flatpak) | ✔ | | | |
-| Quota par compte | ✔ | | | |
-| Limite du cache local, par compte | ✔ | | | |
-| Pause / reprise des uploads | ✔ | | | |
-| Navigateur de fichiers graphique unifié | ✔ | | | |
-| Opérations sur les fichiers en CLI (`ls`, `cp`, `mv`…) | ✔ | | | |
-| Mise en route guidée (client OAuth perso compris), démarrage auto | ✔ | | | |
-| Système de fichiers superposé `nuage-fs` | ✔ relais + exclusions | ✔ + épinglage | | |
-| Exclusions (chemins et motifs) | ✔ via `nuage-fs` + filtres rclone | | | |
-| Mode hors ligne (épinglage) | | ✔ | | |
-| CI GitHub Actions, releases (bundle Flatpak + binaires natifs) | ✔ | | | |
-| Publication sur Flathub | | | ✔ | |
-| Interface texte (TUI) ou web | | | | ✘ (la CLI suffit) |
-| Badges d'état dans Nautilus | | | hors Flatpak, éventuellement | impossible depuis un Flatpak |
-| Miroir hors ligne de tout le compte | | | | ✘ (seuls les éléments épinglés) |
-| Résolution de conflits pour les fichiers non épinglés | | | | ✘ (on s'en remet au VFS de rclone) |
-| Édition des Google Docs hors du navigateur web | | | | ✘ (raccourcis web, voir [Google Drive](#comptes-et-authentification)) |
-| Calendrier, contacts, mail, photos, documents collaboratifs | | | | ✘ |
+| Google Drive ("My Drive") | ✔ | | | |
+| Shared drives (each one an account) | | | ✔ | |
+| "Shared with me" (Google), SharePoint and OneDrive for Business | | | later | |
+| `local` provider (tests, CI) | ✔ | | | |
+| OneDrive (personal) | | | ✔ | |
+| Nextcloud, WebDAV, S3 storage | | | ✔ (added on 2026-11-05) | |
+| Dropbox, pCloud | | | preview (to try with a real account) | |
+| Proton Drive | | | preview, opt-in build (rclone backend in beta) | |
+| Mount per account, folder of your choice | ✔ | | | |
+| `nuaged` daemon + `nuage` CLI | ✔ | | | |
+| Headless installation (native binary, systemd service) | ✔ | | | |
+| GTK app + system tray icon (Flatpak) | ✔ | | | |
+| Quota per account | ✔ | | | |
+| Local cache limit, per account | ✔ | | | |
+| Pause / resume uploads | ✔ | | | |
+| Unified graphical file browser | ✔ | | | |
+| File operations from the CLI (`ls`, `cp`, `mv`…) | ✔ | | | |
+| Guided setup (including the user's own OAuth client), autostart | ✔ | | | |
+| Overlay file system `nuage-fs` | ✔ relay + exclusions | ✔ + pinning | | |
+| Exclusions (paths and patterns) | ✔ via `nuage-fs` + rclone filters | | | |
+| Offline mode (pinning) | | ✔ | | |
+| GitHub Actions CI, releases (Flatpak bundle + native binaries) | ✔ | | | |
+| Publication on Flathub | | | ✔ | |
+| Text (TUI) or web interface | | | | ✘ (the CLI is enough) |
+| Status badges in Nautilus | | | outside Flatpak, possibly | impossible from a Flatpak |
+| Offline mirror of the whole account | | | | ✘ (only pinned items) |
+| Conflict resolution for unpinned files | | | | ✘ (we rely on rclone's VFS) |
+| Editing Google Docs outside the web browser | | | | ✘ (web shortcuts, see [Google Drive](#accounts-and-authentication)) |
+| Calendar, contacts, mail, photos, collaborative documents | | | | ✘ |
 
-## Existant (évalué le 2026-10-30)
+## Existing tools (assessed on 2026-10-30)
 
-**RClone Manager** (`io.github.zarestia_dev.rclone-manager`, Flathub, Tauri/Rust, maintenu) couvre une partie du besoin côté bureau : montage, icône tray, plusieurs fournisseurs, navigateur de fichiers. Mais :
+**RClone Manager** (`io.github.zarestia_dev.rclone-manager`, Flathub, Tauri/Rust, maintained) covers part of the need on the desktop: mounting, tray icon, several providers, file browser. But:
 
-- **son Flatpak ne monte pas tel quel** : le manifeste ne déclare ni `--talk-name=org.freedesktop.Flatpak` ni `--filesystem=home`, et l'utilisateur doit faire un `flatpak override` manuel (issues #45, #52, #113 ; le mainteneur indique que Flathub refuse ces permissions) ;
-- **rclone n'est pas embarqué** : l'application télécharge la dernière version au premier lancement, sans version épinglée ;
-- il affiche le quota (`operations/about`) mais **pas d'état « à jour / en sync »** (il ne lit pas `vfs/stats`) ;
-- il n'est pas GNOME natif (Tauri/WebKit).
+- **its Flatpak does not mount as is**: the manifest declares neither `--talk-name=org.freedesktop.Flatpak` nor `--filesystem=home`, and the user has to run a manual `flatpak override` (issues #45, #52, #113; the maintainer says Flathub refuses these permissions);
+- **rclone is not bundled**: the app downloads the latest version on first launch, with no pinned version;
+- it shows the quota (`operations/about`) but **no "up to date / syncing" status** (it does not read `vfs/stats`);
+- it is not native GNOME (Tauri/WebKit).
 
-Nuage se justifie donc par une UX GNOME native, simple et ciblée, un montage qui marche sans réglage manuel, un état de sync clair, et un mode headless scriptable. Son wrapper `fusermount3` reste une référence utile.
+Nuage is therefore justified by a native, simple and focused GNOME UX, mounting that works without manual tweaking, a clear sync status, and a scriptable headless mode. Its `fusermount3` wrapper remains a useful reference.
 
-## Deux modes de distribution
+## Two distribution modes
 
-| | Bureau | Headless |
+| | Desktop | Headless |
 |---|---|---|
-| Cible | Ubuntu / GNOME avec session graphique | serveur Linux sans écran, administré en SSH |
-| Paquet | Flatpak (bundle `.flatpak`, Flathub en v2) | binaire natif : tarball x86_64 et `.deb` |
-| Contenu | `nuaged` + `nuage-gtk` + `nuage` + rclone + wrapper `fusermount3` | `nuaged` + `nuage` + rclone (même version épinglée) + unit systemd ; **aucune dépendance GTK** |
-| Lancement du démon | par `nuage-gtk` (démarrage auto via le portail Background) | service systemd utilisateur `nuaged.service` ; `loginctl enable-linger` pour tourner sans session ouverte |
-| FUSE | `fusermount3` de l'hôte, via le wrapper (voir [point dur](#le-point-dur--fuse-dans-le-sandbox-flatpak)) | `fusermount3` du système, directement |
-| Secrets | portail Secret | Secret Service si disponible, sinon fichier en `0600` (voir [Sécurité](#sécurité-et-stockage)) |
-| Authentification | navigateur ouvert automatiquement | URL + tunnel SSH, ou token généré ailleurs (voir [Authentification](#comptes-et-authentification)) |
-| Pré-requis hôte | `flatpak`, `fuse3` | `fuse3`, systemd |
+| Target | Ubuntu / GNOME with a graphical session | Linux server without a screen, administered over SSH |
+| Package | Flatpak (`.flatpak` bundle, Flathub in v2) | native binary: x86_64 tarball and `.deb` |
+| Contents | `nuaged` + `nuage-gtk` + `nuage` + rclone + `fusermount3` wrapper | `nuaged` + `nuage` + rclone (same pinned version) + systemd unit; **no GTK dependency** |
+| Daemon launch | by `nuage-gtk` (autostart via the Background portal) | systemd user service `nuaged.service`; `loginctl enable-linger` to run without an open session |
+| FUSE | the host's `fusermount3`, via the wrapper (see [hard part](#the-hard-part-fuse-in-the-flatpak-sandbox)) | the system's `fusermount3`, directly |
+| Secrets | Secret portal | Secret Service if available, otherwise a `0600` file (see [Security](#security-and-storage)) |
+| Authentication | browser opened automatically | URL + SSH tunnel, or token generated elsewhere (see [Authentication](#accounts-and-authentication)) |
+| Host prerequisites | `flatpak`, `fuse3` | `fuse3`, systemd |
 
-## Le point dur : FUSE dans le sandbox Flatpak
+## The hard part: FUSE in the Flatpak sandbox
 
-Ne concerne que la distribution Flatpak. Le sandbox n'a ni `fusermount3` (binaire setuid) ni le droit de monter. Le contournement **éprouvé** est celui de GNOME Builder, repris par RClone Manager :
+Only concerns the Flatpak distribution. The sandbox has neither `fusermount3` (setuid binary) nor the right to mount. The **proven** workaround is GNOME Builder's, reused by RClone Manager:
 
-1. Le Flatpak installe un script `/app/bin/fusermount3` qui remplace le vrai.
-2. Quand rclone (dans le sandbox) monte, il appelle ce script, qui relaie l'appel au **`fusermount3` de l'hôte** via `flatpak-spawn --host`, en transmettant les descripteurs de fichiers (`_FUSE_COMMFD`, `/dev/fd/N`) avec `--forward-fd`.
-3. Le montage est fait par l'hôte, donc **visible dans Nautilus**. rclone reste dans le sandbox et lit le descripteur `/dev/fuse` qu'on lui renvoie.
+1. The Flatpak installs a script `/app/bin/fusermount3` that replaces the real one.
+2. When rclone (in the sandbox) mounts, it calls this script, which relays the call to the **host's `fusermount3`** via `flatpak-spawn --host`, passing the file descriptors (`_FUSE_COMMFD`, `/dev/fd/N`) with `--forward-fd`.
+3. The mount is done by the host, so it is **visible in Nautilus**. rclone stays in the sandbox and reads the `/dev/fuse` descriptor sent back to it.
 
-**Complication sur Ubuntu 26.04 (constatée au jalon 1).** Le profil AppArmor de `fusermount3` (`/etc/apparmor.d/fusermount3`, fuse3 3.18) n'autorise aucun socket Unix hérité. Un socket créé dans le sandbox (étiquette `unpriv_bwrap`) est refusé (`apparmor="DENIED" operation="file_inherit" ... peer="unpriv_bwrap"`), et `fusermount3` répond « file descriptor 3 is not a socket ». La méthode de GNOME Builder et de RClone Manager échoue donc telle quelle sur cette version.
+**Complication on Ubuntu 26.04 (found at milestone 1).** The AppArmor profile of `fusermount3` (`/etc/apparmor.d/fusermount3`, fuse3 3.18) allows no inherited Unix socket. A socket created in the sandbox (label `unpriv_bwrap`) is denied (`apparmor="DENIED" operation="file_inherit" ... peer="unpriv_bwrap"`), and `fusermount3` answers "file descriptor 3 is not a socket". The GNOME Builder and RClone Manager method therefore fails as is on this version.
 
-**Contournement retenu** : un **relais côté hôte**. Le wrapper lance, via `flatpak-spawn --host`, un petit programme qui crée lui-même une paire de sockets sur l'hôte, exécute `fusermount3` avec, reçoit le descripteur `/dev/fuse` et le renvoie à rclone par le socket transmis depuis le sandbox. Aucune modification du système n'est nécessaire.
+**Chosen workaround**: a **host-side relay**. The wrapper launches, via `flatpak-spawn --host`, a small program that creates a socket pair on the host itself, runs `fusermount3` with it, receives the `/dev/fuse` descriptor and sends it back to rclone through the socket passed from the sandbox. No change to the system is needed.
 
-- Prototype (`poc/flatpak-fuse/`) : relais en Python lancé par `python3` de l'hôte. Montage, lecture, écriture depuis l'hôte et démontage validés le 2026-10-30.
-- Version finale : un petit binaire Rust `nuage-fuse-relay`, livré dans le Flatpak et exécuté sur l'hôte à partir du chemin de l'application (lu dans `/.flatpak-info`), pour ne pas dépendre de Python sur l'hôte.
-- À signaler à Ubuntu (Launchpad, paquet `fuse3`) : le profil casse aussi GNOME Builder.
+- Prototype (`poc/flatpak-fuse/`): relay in Python run by the host's `python3`. Mounting, reading, writing from the host and unmounting validated on 2026-10-30.
+- Final version: a small Rust binary `nuage-fuse-relay`, shipped in the Flatpak and run on the host from the app's path (read from `/.flatpak-info`), so as not to depend on Python on the host.
+- To report to Ubuntu (Launchpad, `fuse3` package): the profile also breaks GNOME Builder.
 
-Référence : `fusermount-wrapper.sh` dans `github.com/flathub/org.gnome.Builder` et `github.com/flathub/io.github.zarestia_dev.rclone-manager`.
+Reference: `fusermount-wrapper.sh` in `github.com/flathub/org.gnome.Builder` and `github.com/flathub/io.github.zarestia_dev.rclone-manager`.
 
-**Conséquences, à documenter dans le README :**
+**Consequences, to document in the README:**
 
-- **Le sandbox est percé** : la permission `--talk-name=org.freedesktop.Flatpak` permet d'exécuter des commandes sur l'hôte. Acceptable pour une v1 distribuée en bundle ; à justifier pour Flathub (Builder l'a obtenue).
-- **Usage limité** : le wrapper ne relaie **que** `fusermount3`. Aucun autre appel à `flatpak-spawn --host` dans l'application.
-- **Dépendance hôte** : `fuse3` (installé par défaut sur Ubuntu).
-- **Même chemin des deux côtés** : c'est le `fusermount3` de l'hôte qui monte, avec le chemin que lui passe rclone ; le dossier de montage doit donc exister au même chemin dans le sandbox et sur l'hôte. Comme l'utilisateur choisit librement son dossier, on demande `--filesystem=home`.
+- **The sandbox is pierced**: the `--talk-name=org.freedesktop.Flatpak` permission allows running commands on the host. Acceptable for a v1 distributed as a bundle; to be justified for Flathub (Builder obtained it).
+- **Limited use**: the wrapper relays **only** `fusermount3`. No other call to `flatpak-spawn --host` in the app.
+- **Host dependency**: `fuse3` (installed by default on Ubuntu).
+- **Same path on both sides**: it is the host's `fusermount3` that mounts, with the path rclone passes to it; the mount folder must therefore exist at the same path in the sandbox and on the host. Since the user chooses their folder freely, we request `--filesystem=home`.
 
 ## Architecture
 
-### Modularité
+### Modularity
 
-Tout ce qui dépend d'un fournisseur est isolé derrière un trait `Provider`. Comme rclone fait les entrées/sorties pour tous les backends, **un fournisseur est essentiellement déclaratif** : type de backend rclone, flux d'authentification, paramètres, capacités, options recommandées. Le moteur, les interfaces et la CI ne connaissent que l'abstraction.
+Everything that depends on a provider is isolated behind a `Provider` trait. Since rclone does the I/O for all backends, **a provider is essentially declarative**: rclone backend type, authentication flow, parameters, capabilities, recommended options. The engine, the interfaces and the CI only know the abstraction.
 
-> **Ajouter un fournisseur = ajouter un module, sans toucher à `engine`, `ui`, `tray` ni `cli`.**
+> **Adding a provider = adding a module, without touching `engine`, `ui`, `tray` or `cli`.**
 
-### Processus
+### Processes
 
 ```
-nuaged  (démon : engine + rclone rcd)
-   ▲  socket Unix, JSON (Command / Event)
-   ├─ nuage-gtk   application de bureau : fenêtre + icône de barre système
-   └─ nuage       CLI (humains, scripts, agents)
+nuaged  (daemon: engine + rclone rcd)
+   ▲  Unix socket, JSON (Command / Event)
+   ├─ nuage-gtk   desktop app: window + system tray icon
+   └─ nuage       CLI (humans, scripts, agents)
 ```
 
-- Le démon possède tout l'état : comptes, montages, exclusions, épingles. Les clients ne parlent jamais à rclone.
-- Fermer ou quitter l'application GTK n'arrête pas forcément la sync (voir « Quit » dans [Interface](#interface-gnome--libadwaita)).
-- Un seul démon par utilisateur ; un second lancement détecte le premier par le socket et s'arrête.
+- The daemon owns all the state: accounts, mounts, exclusions, pins. Clients never talk to rclone.
+- Closing or quitting the GTK app does not necessarily stop the sync (see "Quit" in [Interface](#interface-gnome--libadwaita)).
+- A single daemon per user; a second launch detects the first through the socket and exits.
 
-### Workspace Cargo
+### Cargo workspace
 
 ```
 nuage/
 ├─ Cargo.toml                      (workspace)
 ├─ crates/
-│  ├─ core/        nuage-core       modèle de domaine, traits, Command/Event (aucune dépendance GTK)
-│  ├─ ipc/         nuage-ipc        protocole socket Unix : sérialisation, client, serveur
-│  ├─ rclone-rc/   nuage-rclone     client typé de l'API rc + supervision du processus rcd
-│  ├─ providers/   nuage-providers  trait Provider + registre + un module par fournisseur
-│  │   └─ src/{gdrive, onedrive, dropbox, pcloud, protondrive, nextcloud, webdav, s3, local}.rs   (une feature Cargo par fournisseur)
-│  ├─ engine/      nuage-engine     comptes, montages, exclusions, épinglage, agrégation d'état
-│  ├─ fs/          nuage-fs         système de fichiers FUSE superposé (relais + exclusions en v1, épinglage en v1.1)
-│  ├─ daemon/      nuaged           binaire : engine + serveur ipc
-│  ├─ cli/         nuage            binaire : CLI (clap), client ipc
-│  ├─ tray/        nuage-tray       icône StatusNotifierItem (ksni)
-│  ├─ ui/          nuage-ui         GTK4 + libadwaita : navigateur, mise en route, réglages
-│  └─ gtk/         nuage-gtk        binaire : assemble ui + tray, client ipc
-├─ build-aux/flatpak/              manifeste, fusermount-wrapper.sh, cargo-sources.json
-├─ build-aux/native/               unit systemd, configuration cargo-deb, script du tarball
-├─ data/                           .desktop, metainfo.xml, icônes, schémas
+│  ├─ core/        nuage-core       domain model, traits, Command/Event (no GTK dependency)
+│  ├─ ipc/         nuage-ipc        Unix socket protocol: serialization, client, server
+│  ├─ rclone-rc/   nuage-rclone     typed client for the rc API + supervision of the rcd process
+│  ├─ providers/   nuage-providers  Provider trait + registry + one module per provider
+│  │   └─ src/{gdrive, onedrive, dropbox, pcloud, protondrive, nextcloud, webdav, s3, local}.rs   (one Cargo feature per provider)
+│  ├─ engine/      nuage-engine     accounts, mounts, exclusions, pinning, status aggregation
+│  ├─ fs/          nuage-fs         overlay FUSE file system (relay + exclusions in v1, pinning in v1.1)
+│  ├─ daemon/      nuaged           binary: engine + ipc server
+│  ├─ cli/         nuage            binary: CLI (clap), ipc client
+│  ├─ tray/        nuage-tray       StatusNotifierItem icon (ksni)
+│  ├─ ui/          nuage-ui         GTK4 + libadwaita: browser, setup, settings
+│  └─ gtk/         nuage-gtk        binary: assembles ui + tray, ipc client
+├─ build-aux/flatpak/              manifest, fusermount-wrapper.sh, cargo-sources.json
+├─ build-aux/native/               systemd unit, cargo-deb configuration, tarball script
+├─ data/                           .desktop, metainfo.xml, icons, schemas
 ├─ docs/ARCHITECTURE.md
 ├─ docs/ADDING_A_PROVIDER.md
 ├─ docs/CLI.md
@@ -172,48 +172,48 @@ nuage/
 └─ README.md
 ```
 
-**Règles de dépendance** (vérifiées en CI) :
+**Dependency rules** (checked in CI):
 
-| Crate | Peut dépendre de |
+| Crate | May depend on |
 |---|---|
-| `core` | aucune crate du projet |
+| `core` | no crate of the project |
 | `ipc` | `core` |
 | `providers` | `core` |
 | `rclone-rc` | `core` |
 | `engine` | `core`, `rclone-rc`, `providers`, `fs` |
 | `daemon` | `engine`, `ipc`, `core` |
-| `cli`, `ui`, `tray`, `gtk` | `core`, `ipc` (+ `ui`, `tray` pour `gtk`) ; **jamais** `engine` ni `rclone-rc` |
+| `cli`, `ui`, `tray`, `gtk` | `core`, `ipc` (+ `ui`, `tray` for `gtk`); **never** `engine` or `rclone-rc` |
 
-`daemon` et `cli` ne doivent tirer **aucune dépendance GTK** (vérifié en CI avec `cargo tree`), pour que le paquet headless s'installe sur un serveur nu.
+`daemon` and `cli` must pull in **no GTK dependency** (checked in CI with `cargo tree`), so that the headless package installs on a bare server.
 
-### Protocole IPC (`ipc`)
+### IPC protocol (`ipc`)
 
-- Socket Unix `$XDG_RUNTIME_DIR/nuage/nuaged.sock`, droits `0600`. Dans le Flatpak : `$XDG_RUNTIME_DIR/app/io.github.felixilgatto.Nuage/nuaged.sock`, partagé avec l'hôte, pour que la CLI de l'hôte puisse aussi s'y connecter.
-- JSON délimité par des retours à la ligne : requêtes `Command` avec réponse, plus un abonnement au flux d'`Event`.
-- Poignée de main avec numéro de version du protocole ; un client trop ancien ou trop récent reçoit une erreur claire.
+- Unix socket `$XDG_RUNTIME_DIR/nuage/nuaged.sock`, permissions `0600`. In the Flatpak: `$XDG_RUNTIME_DIR/app/io.github.felixilgatto.Nuage/nuaged.sock`, shared with the host, so that the host's CLI can connect to it too.
+- Newline-delimited JSON: `Command` requests with a response, plus a subscription to the `Event` stream.
+- Handshake with a protocol version number; a client that is too old or too new gets a clear error.
 
-### Modèle de domaine (`core`)
+### Domain model (`core`)
 
 ```rust
 AccountId
 Account   { id, provider_id, display_name, remote_name, root, mount_point, cache_limit }
-          // root : dossier du remote montré par le compte (un bucket S3…), vide = tout le remote
+          // root: folder of the remote shown by the account (an S3 bucket…), empty = the whole remote
 RemotePath { account, path }
 Entry     { name, path, kind: EntryKind /* File | Folder */, size, modified, mime, hash,
-            native_doc: Option<NativeDoc> }      // Google Docs : lien web
-Quota     { total, used, free, trashed }         // tous optionnels : tous les backends ne les donnent pas
+            native_doc: Option<NativeDoc> }      // Google Docs: web link
+Quota     { total, used, free, trashed }         // all optional: not every backend provides them
 SyncState  = UpToDate | Syncing { uploads, queued } | Paused { queued } | Error { … } | Stopped | Offline
-Capabilities                                      // voir « Trait Provider »
+Capabilities                                      // see "Provider trait"
 Exclusion { account, rule: ExclusionRule /* Path(RemotePath) | Glob(String) */, created_at }
 Pin       { account, path, kind: PinKind /* File | FolderRecursive */, pinned_at }   // v1.1
 PinState   = Downloading | Available | ModifiedLocally | Conflict | Error             // v1.1
-Command   // client → démon
-Event     // démon → clients
+Command   // client → daemon
+Event     // daemon → clients
 ```
 
-`Account.mount_point` est le **dossier choisi par l'utilisateur** ; il ne doit pas être confondu avec le point de montage interne de rclone (voir [Mode hors ligne](#mode-hors-ligne-v11)).
+`Account.mount_point` is the **folder chosen by the user**; it must not be confused with rclone's internal mount point (see [Offline mode](#offline-mode-v11)).
 
-### Trait `Provider`
+### `Provider` trait
 
 ```rust
 pub trait Provider: Send + Sync {
@@ -222,426 +222,426 @@ pub trait Provider: Send + Sync {
     fn icon_name(&self) -> &str;
     fn rclone_backend(&self) -> &'static str;        // "drive"
     fn auth(&self) -> AuthSpec;                      // OAuthBrowser | Credentials(form) | None
-    fn config_params(&self, input: &SetupInput) -> Vec<(String, String)>; // ex. ("scope", "drive")
-    fn static_capabilities(&self) -> Capabilities;   // complétées à l'exécution par operations/fsinfo
+    fn config_params(&self, input: &SetupInput) -> Vec<(String, String)>; // e.g. ("scope", "drive")
+    fn static_capabilities(&self) -> Capabilities;   // completed at runtime by operations/fsinfo
     fn recommended_vfs_opts(&self) -> VfsOptions;
-    fn native_docs(&self) -> Option<NativeDocPolicy>; // Google Docs → raccourcis web
-    // Facultatifs (implémentation par défaut) :
-    fn client_guide(&self) -> Vec<GuideStep>;        // étapes pour créer son client OAuth (gdrive)
+    fn native_docs(&self) -> Option<NativeDocPolicy>; // Google Docs → web shortcuts
+    // Optional (default implementation):
+    fn client_guide(&self) -> Vec<GuideStep>;        // steps to create your own OAuth client (gdrive)
     fn client_id_suffix(&self) -> Option<&'static str>;
-    fn sub_drives(&self) -> Option<SubDrives>;       // Drive partagés : un compte chacun
-    fn choice_rank(&self, question: &str, choice: &str) -> u8; // questions de rclone après l'OAuth (drive OneDrive)
-    fn root(&self, input: &SetupInput) -> String;    // dossier du remote montré (bucket S3)
+    fn sub_drives(&self) -> Option<SubDrives>;       // shared drives: one account each
+    fn choice_rank(&self, question: &str, choice: &str) -> u8; // rclone's questions after OAuth (OneDrive drive)
+    fn root(&self, input: &SetupInput) -> String;    // folder of the remote shown (S3 bucket)
     fn validate(&self, input: &SetupInput) -> Result<(), String>;
 }
 ```
 
-Détail à jour et une ligne par méthode : `docs/ADDING_A_PROVIDER.md`.
+Up-to-date detail, with one line per method: `docs/ADDING_A_PROVIDER.md`.
 
-- **Registre** : `ProviderRegistry`, construit à partir des features Cargo activées.
-- **Capacités réelles** = capacités statiques fusionnées avec `operations/fsinfo` (rclone y expose les `Features` du backend : `About`, `PublicLink`, `Copy`, `Move`, `PurgeTrash`…). **Les interfaces masquent ou refusent les actions selon `Capabilities`.**
-- **Fournisseur `local`** (un `alias` rclone d'un dossier) : pour les tests et la CI, sans identifiants.
-- **Livrés** (features `default`) : `gdrive`, `onedrive`, `nextcloud`, `webdav`, `s3`, `local` ; en **preview** : `dropbox`, `pcloud`. **Preview hors `default`** : `protondrive`. Le statut preview est marqué par un commentaire `# Preview` dans `crates/providers/Cargo.toml` ; les fournisseurs preview viennent en dernier dans la liste.
+- **Registry**: `ProviderRegistry`, built from the enabled Cargo features.
+- **Actual capabilities** = static capabilities merged with `operations/fsinfo` (rclone exposes the backend's `Features` there: `About`, `PublicLink`, `Copy`, `Move`, `PurgeTrash`…). **Interfaces hide or refuse actions based on `Capabilities`.**
+- **`local` provider** (an rclone `alias` of a folder): for tests and CI, without credentials.
+- **Shipped** (`default` features): `gdrive`, `onedrive`, `nextcloud`, `webdav`, `s3`, `local`; in **preview**: `dropbox`, `pcloud`. **Preview outside `default`**: `protondrive`. The preview status is marked by a `# Preview` comment in `crates/providers/Cargo.toml`; preview providers come last in the list.
 
-### Moteur (`engine`, dans `nuaged`)
+### Engine (`engine`, in `nuaged`)
 
 ```
 nuaged
- ├─ RcdSupervisor     lance et surveille `rclone rcd` (127.0.0.1, port et identifiants aléatoires)
- ├─ AccountManager    création, renommage, suppression, reconnexion des comptes
- ├─ MountManager      mount/mount, mount/unmount, remontage au démarrage, nettoyage des orphelins
- ├─ UploadControl     pause / reprise des uploads, par compte ou globale
- ├─ ExclusionManager  règles d'exclusion par compte → filtres rclone du montage
- ├─ StatusPoller      interroge vfs/stats, core/stats, operations/about ; publie des Event
- ├─ FileService       opérations sur les fichiers (list, mkdir, move, copy, delete, upload, download, lien)
- └─ PinManager        épinglage hors ligne (v1.1)
+ ├─ RcdSupervisor     launches and monitors `rclone rcd` (127.0.0.1, random port and credentials)
+ ├─ AccountManager    creating, renaming, removing, reconnecting accounts
+ ├─ MountManager      mount/mount, mount/unmount, remounting at startup, cleaning up orphans
+ ├─ UploadControl     pause / resume uploads, per account or global
+ ├─ ExclusionManager  exclusion rules per account → rclone filters of the mount
+ ├─ StatusPoller      polls vfs/stats, core/stats, operations/about; publishes Events
+ ├─ FileService       file operations (list, mkdir, move, copy, delete, upload, download, link)
+ └─ PinManager        offline pinning (v1.1)
 ```
 
-Dans le Flatpak, `/app/bin` contient `rclone` (version épinglée), le wrapper `fusermount3`, `nuaged`, `nuage` et `nuage-gtk`.
+In the Flatpak, `/app/bin` contains `rclone` (pinned version), the `fusermount3` wrapper, `nuaged`, `nuage` and `nuage-gtk`.
 
-**Cycle de vie :**
+**Lifecycle:**
 
-- rclone est un processus enfant du démon.
-- Au démarrage : nettoyer les montages orphelins laissés par un crash, puis remonter les comptes.
-- À l'arrêt (`SIGTERM`, `nuage daemon stop`, « Quit ») : démonter tous les comptes, puis `core/quit`. Le comportement s'il reste des uploads est décrit dans [Quit](#quit).
+- rclone is a child process of the daemon.
+- At startup: clean up orphan mounts left by a crash, then remount the accounts.
+- At shutdown (`SIGTERM`, `nuage daemon stop`, "Quit"): unmount all accounts, then `core/quit`. The behavior when uploads remain is described in [Quit](#quit).
 
-### Endpoints rc utilisés
+### rc endpoints used
 
-| Besoin | Endpoint | Remarque |
+| Need | Endpoint | Note |
 |---|---|---|
-| Démon vivant | `core/version` | health check, version minimale |
-| Capacités | `operations/fsinfo` | features du backend |
-| Monter | `mount/mount` | `fs`, `mountPoint`, `vfsOpt` (`CacheMode=full`, `CacheMaxSize`, `CacheMaxAge`, `WriteBack` très long), `_filter` (`ExcludeRule` / `FilterRule`) ; tout en JSON |
-| Lister / démonter | `mount/listmounts`, `mount/unmount` | |
-| État de sync | `vfs/stats` | `fs` **obligatoire** dès que plusieurs VFS sont actifs ; `diskCache.{uploadsInProgress, uploadsQueued, erroredFiles, bytesUsed, outOfSpace}` ; `bytesUsed` n'est rafraîchi qu'au poll du cache (60 s par défaut) |
-| File d'upload | `vfs/queue` | `{"queue":[{name, id, size, expiry, tries, delay, uploading}]}` ; badge « uploading » par fichier |
-| Pause des uploads | `vfs/queue` + `vfs/queue-set-expiry` | voir [Pause](#état-de-synchronisation-pause-et-quota) |
-| Quota | `operations/about` | `total`, `used`, `free`, `trashed` ; les champs absents sont omis ; vérifier `Features.About` avant l'appel (le backend `memory` renvoie une erreur 500) |
-| Rafraîchir | `vfs/refresh` | |
-| Navigation | `operations/list`, `operations/stat` | |
-| Opérations fichiers | `operations/mkdir`, `movefile`, `copyfile`, `deletefile`, `purge`, `uploadfile`, `publiclink` | `_async=true` + `job/status` pour les opérations longues |
-| Transferts | `core/stats` | débit, progression |
-| Épinglage (v1.1) | `operations/copyfile`, `operations/stat`, `operations/list` (hashes, modtime) | téléchargement, renvoi, détection des changements distants |
-| Comptes | `config/create`, `config/update`, `config/listremotes`, `config/get`, `config/delete` | machine à états non interactive (`opt: {nonInteractive, obscure, continue, state, result}`) ; `config/create` enregistre le remote avant la fin des questions : le supprimer si l'utilisateur abandonne |
-| OAuth (GUI) | `config/create` avec `_async`, `config/oauthstatus`, `config/oauthstop` | `config_auth_no_browser: "true"` puis `oauthstatus` donne `authUrl` à ouvrir via OpenURI ; `oauthstop` annule |
-| Arrêt | `core/quit` | |
+| Daemon alive | `core/version` | health check, minimum version |
+| Capabilities | `operations/fsinfo` | backend features |
+| Mount | `mount/mount` | `fs`, `mountPoint`, `vfsOpt` (`CacheMode=full`, `CacheMaxSize`, `CacheMaxAge`, very long `WriteBack`), `_filter` (`ExcludeRule` / `FilterRule`); all in JSON |
+| List / unmount | `mount/listmounts`, `mount/unmount` | |
+| Sync status | `vfs/stats` | `fs` **required** as soon as several VFS are active; `diskCache.{uploadsInProgress, uploadsQueued, erroredFiles, bytesUsed, outOfSpace}`; `bytesUsed` is only refreshed at the cache poll (60 s by default) |
+| Upload queue | `vfs/queue` | `{"queue":[{name, id, size, expiry, tries, delay, uploading}]}`; "uploading" badge per file |
+| Pausing uploads | `vfs/queue` + `vfs/queue-set-expiry` | see [Pause](#sync-status-pause-and-quota) |
+| Quota | `operations/about` | `total`, `used`, `free`, `trashed`; missing fields are omitted; check `Features.About` before the call (the `memory` backend returns a 500 error) |
+| Refresh | `vfs/refresh` | |
+| Browsing | `operations/list`, `operations/stat` | |
+| File operations | `operations/mkdir`, `movefile`, `copyfile`, `deletefile`, `purge`, `uploadfile`, `publiclink` | `_async=true` + `job/status` for long operations |
+| Transfers | `core/stats` | speed, progress |
+| Pinning (v1.1) | `operations/copyfile`, `operations/stat`, `operations/list` (hashes, modtime) | download, upload back, detection of remote changes |
+| Accounts | `config/create`, `config/update`, `config/listremotes`, `config/get`, `config/delete` | non-interactive state machine (`opt: {nonInteractive, obscure, continue, state, result}`); `config/create` saves the remote before the questions are over: delete it if the user gives up |
+| OAuth (GUI) | `config/create` with `_async`, `config/oauthstatus`, `config/oauthstop` | `config_auth_no_browser: "true"` then `oauthstatus` gives the `authUrl` to open via OpenURI; `oauthstop` cancels |
+| Shutdown | `core/quit` | |
 
-Les noms de champs et d'options évoluent d'une version de rclone à l'autre : les vérifier sur la version embarquée. Un test d'intégration doit échouer si un champ attendu disparaît lors d'une montée de version.
+Field and option names change from one rclone version to another: check them on the bundled version. An integration test must fail if an expected field disappears during a version upgrade.
 
-### Ce que veut dire « à jour »
+### What "up to date" means
 
-En mode montage, rien n'est copié à l'avance. **« À jour » = aucune écriture locale en attente d'upload.** Les changements faits ailleurs apparaissent au prochain rafraîchissement (polling du backend par rclone) ou via « Refresh ».
+In mount mode, nothing is copied in advance. **"Up to date" = no local write waiting to be uploaded.** Changes made elsewhere appear at the next refresh (backend polling by rclone) or via "Refresh".
 
-## Fonctionnalités
+## Features
 
-### Comptes et authentification
+### Accounts and authentication
 
-- La mise en route (GUI) ou `nuage account add` (CLI) liste les fournisseurs du registre, puis suit l'`AuthSpec` du fournisseur choisi.
-- **Nom par défaut d'un compte** : le nom du fournisseur (« Google Drive »), suffixé s'il est déjà pris (« Google Drive 2 »). Il sert aussi au dossier par défaut. Renommable ensuite ; l'adresse e-mail est affichée en sous-titre quand le fournisseur la donne.
-- Token expiré ou révoqué → état ⚠ et action « Reconnect » (`rclone config reconnect`, ou `nuage account reconnect`).
+- Setup (GUI) or `nuage account add` (CLI) lists the providers in the registry, then follows the `AuthSpec` of the chosen provider.
+- **Default account name**: the provider's name ("Google Drive"), with a suffix if it is already taken ("Google Drive 2"). It is also used for the default folder. Can be renamed later; the email address is shown as a subtitle when the provider gives it.
+- Expired or revoked token → ⚠ state and "Reconnect" action (`rclone config reconnect`, or `nuage account reconnect`).
 
-**Suppression d'un compte** (après confirmation ; en CLI, `--yes` obligatoire) : démontage, suppression du remote rclone, du cache, des épingles et du dossier de montage s'il est vide. **Rien n'est supprimé sur le cloud.** Refusée tant qu'il reste des uploads en attente, sauf avec `--force`.
+**Removing an account** (after confirmation; in the CLI, `--yes` is required): unmounting, removal of the rclone remote, of the cache, of the pins and of the mount folder if it is empty. **Nothing is deleted in the cloud.** Refused while uploads are still pending, unless `--force` is given.
 
-**OAuth sur le bureau** : `rclone config create <nom> <backend> …` ; rclone ouvre son serveur local `127.0.0.1:53682` et le navigateur (via le portail OpenURI depuis le sandbox). Cas d'erreur à gérer : port occupé, annulation, timeout, navigateur qui ne s'ouvre pas (afficher l'URL à copier).
+**OAuth on the desktop**: `rclone config create <name> <backend> …`; rclone opens its local server `127.0.0.1:53682` and the browser (via the OpenURI portal from the sandbox). Error cases to handle: port in use, cancellation, timeout, browser that does not open (show the URL to copy).
 
-**OAuth en headless** (deux méthodes, documentées dans le README) :
+**Headless OAuth** (two methods, documented in the README):
 
-1. **URL + tunnel SSH** (par défaut sans navigateur local) : la CLI affiche l'URL d'autorisation et attend sur `127.0.0.1:53682`. L'utilisateur ouvre un tunnel (`ssh -L 53682:localhost:53682 serveur`) et ouvre l'URL sur son poste. Côté rclone : paramètre `config_auth_no_browser: "true"` (le drapeau `--auth-no-open-browser` n'existe que pour `rclone authorize`).
-2. **Token généré ailleurs** (entièrement scriptable) : `rclone authorize drive <client_id> <client_secret>` sur un poste avec navigateur, puis `nuage account add gdrive --client-id … --client-secret … --token-file token.json` (ou `--token '<json>'`) sur le serveur. Côté rclone, un seul `config/create` suffit en fournissant `token`, `config_refresh_token: "false"`, `config_change_team_drive: "false"`.
+1. **URL + SSH tunnel** (default without a local browser): the CLI shows the authorization URL and waits on `127.0.0.1:53682`. The user opens a tunnel (`ssh -L 53682:localhost:53682 server`) and opens the URL on their own machine. On the rclone side: parameter `config_auth_no_browser: "true"` (the `--auth-no-open-browser` flag only exists for `rclone authorize`).
+2. **Token generated elsewhere** (fully scriptable): `rclone authorize drive <client_id> <client_secret>` on a machine with a browser, then `nuage account add gdrive --client-id … --client-secret … --token-file token.json` (or `--token '<json>'`) on the server. On the rclone side, a single `config/create` is enough by providing `token`, `config_refresh_token: "false"`, `config_change_team_drive: "false"`.
 
-**Google Drive :**
+**Google Drive:**
 
-- « Mon Drive », et chaque Drive partagé comme un compte à part, sans se reconnecter (`sub_drives`). « Partagés avec moi » plus tard.
-- scope `drive` : accès aux fichiers uniquement, aucun autre service Google ;
-- **client OAuth perso obligatoire, avec un parcours guidé.** Le client partagé de rclone « cessera de fonctionner courant 2026 » (avertissement de rclone 1.75), et un client propre à Nuage imposerait une vérification Google + un audit CASA (scope `drive` « restricted »). Chaque utilisateur crée donc son client GCP (type « Desktop app ») :
-  - GUI : un écran guidé avant l'authentification (étapes numérotées, liens directs vers la console GCP, champs client ID / secret à coller, vérification immédiate) ;
-  - CLI : `--client-id` / `--client-secret` obligatoires pour `gdrive`, avec un message qui renvoie au guide du README s'ils manquent ;
-  - le client est mémorisé globalement : les comptes Google suivants ne repassent pas par cet écran ;
-- `drive` est un scope « restricted » : en statut *Testing*, les refresh tokens expirent au bout de 7 jours. Le guide fait publier le projet GCP en *Production* (non vérifié, suffisant pour un usage personnel) ;
-- **Google Docs/Sheets/Slides natifs** : présentés comme des **raccourcis web** dans le dossier monté, au format d'export rclone **`link.html`** (page qui redirige vers le document). Le format `desktop` s'ouvre dans l'éditeur de texte depuis Nautilus, donc il est écarté. Un double-clic ouvre `link.html` avec l'application HTML par défaut (normalement le navigateur). Les fichiers lien sont en lecture seule (rclone refuse de les modifier). Pas d'export docx/xlsx/pptx, donc ni doublons ni perte de mise en forme. Dans le navigateur de Nuage, ils sont signalés et s'ouvrent directement dans le navigateur web.
+- "My Drive", and each shared drive as a separate account, without signing in again (`sub_drives`). "Shared with me" later.
+- `drive` scope: access to files only, no other Google service;
+- **The user's own OAuth client is required, with a guided flow.** rclone's shared client "will stop working during 2026" (rclone 1.75 warning), and a client of Nuage's own would require a Google verification + a CASA audit (`drive` scope is "restricted"). Each user therefore creates their own GCP client (type "Desktop app"):
+  - GUI: a guided screen before authentication (numbered steps, direct links to the GCP console, client ID / secret fields to paste into, immediate check);
+  - CLI: `--client-id` / `--client-secret` required for `gdrive`, with a message pointing to the README guide if they are missing;
+  - the client is remembered globally: subsequent Google accounts do not go through this screen again;
+- `drive` is a "restricted" scope: in *Testing* status, refresh tokens expire after 7 days. The guide has the user publish the GCP project in *Production* (unverified, sufficient for personal use);
+- **Native Google Docs/Sheets/Slides**: presented as **web shortcuts** in the mounted folder, in rclone's **`link.html`** export format (a page that redirects to the document). The `desktop` format opens in the text editor from Nautilus, so it is ruled out. A double-click opens `link.html` with the default HTML application (normally the browser). Link files are read-only (rclone refuses to modify them). No docx/xlsx/pptx export, so neither duplicates nor loss of formatting. In Nuage's browser, they are flagged and open directly in the web browser.
 
-**OneDrive** : OneDrive personnel du compte ; scopes `Files.ReadWrite.All` + `offline_access` uniquement (défaut rclone) ; client de rclone par défaut, app Azure perso facultative. Le drive nommé « OneDrive » est essayé en premier (`choice_rank`). Le Coffre-fort personnel ne s'ouvre pas hors des applications Microsoft.
+**OneDrive**: the account's personal OneDrive; scopes `Files.ReadWrite.All` + `offline_access` only (rclone default); rclone's client by default, own Azure app optional. The drive named "OneDrive" is tried first (`choice_rank`). The Personal Vault does not open outside Microsoft apps.
 
-**Dropbox, pCloud** : OAuth dans le navigateur avec le client de rclone (client perso facultatif), comme OneDrive. pCloud trouve la région (US ou UE) à l'authentification.
+**Dropbox, pCloud**: OAuth in the browser with rclone's client (own client optional), like OneDrive. pCloud finds the region (US or EU) at authentication.
 
-**Fournisseurs à identifiants** (`AuthSpec::Credentials`, un formulaire ; en CLI `--param clé=valeur`) :
+**Credential-based providers** (`AuthSpec::Credentials`, a form; in the CLI `--param key=value`):
 
-- **Nextcloud** : adresse du serveur (Nuage en déduit `…/remote.php/dav/files/<utilisateur>/`) ou adresse WebDAV copiée depuis Nextcloud, nom d'utilisateur, mot de passe d'application ; vendor rclone `nextcloud` (uploads par morceaux).
-- **WebDAV** : n'importe quel serveur WebDAV ; adresse complète, utilisateur et mot de passe facultatifs.
-- **S3** : Amazon S3 et compatibles (R2, B2, Wasabi, MinIO…) ; clés d'accès, endpoint (vide pour Amazon), région si besoin, et **bucket facultatif** : s'il est donné, le compte montre ce bucket (ou `bucket/dossier`) via `Account.root`, ce qui marche avec une clé limitée à ce bucket ; sinon chaque bucket est un dossier.
-- **Proton Drive** (preview, build opt-in) : adresse, mot de passe, code 2FA ; rclone garde la session. Une session terminée par Proton ne se reconnecte pas : supprimer et rajouter le compte. Le mot de passe de boîte séparé n'est pas géré.
-- rclone enregistre un formulaire sans l'essayer : **le moteur liste la racine du compte juste après sa création** (30 s au plus) et, en cas d'échec, supprime le remote et dit quoi corriger (champs remplis à vérifier, bucket inexistant, serveur injoignable).
-- Pas de changement poussé par ces backends : `DirCacheTime` d'une minute pour voir les modifications faites ailleurs.
+- **Nextcloud**: server address (Nuage derives `…/remote.php/dav/files/<user>/` from it) or WebDAV address copied from Nextcloud, user name, app password; rclone vendor `nextcloud` (chunked uploads).
+- **WebDAV**: any WebDAV server; full address, optional user and password.
+- **S3**: Amazon S3 and compatibles (R2, B2, Wasabi, MinIO…); access keys, endpoint (empty for Amazon), region if needed, and **optional bucket**: if given, the account shows this bucket (or `bucket/folder`) via `Account.root`, which works with a key limited to that bucket; otherwise each bucket is a folder.
+- **Proton Drive** (preview, opt-in build): address, password, 2FA code; rclone keeps the session. A session ended by Proton does not reconnect: remove and add the account again. A separate mailbox password is not supported.
+- rclone saves a form without trying it: **the engine lists the account's root right after creating it** (30 s at most) and, on failure, deletes the remote and says what to fix (filled-in fields to check, bucket that does not exist, unreachable server).
+- No pushed changes from these backends: a `DirCacheTime` of one minute to see changes made elsewhere.
 
-### Montage et dossier de montage
+### Mounting and mount folder
 
-- Un dossier de montage **par compte**, choisi par l'utilisateur (`gtk::FileDialog` ou `--mount-point`). Défaut : `~/Cloud/<nom-du-compte>`.
-- Validations : dossier vide ou inexistant (on le crée), pas déjà utilisé par un autre compte, pas imbriqué dans un autre point de montage, pas dans le cache.
-- **Flatpak, sous le home** : couvert par `--filesystem=home`. Le portail FileChooser renvoie alors le vrai chemin. Rejeter tout chemin en `/run/user/*/doc/` avec un message clair.
-- **Flatpak, hors du home** (ex. `/mnt/data/Drive`) : l'application le détecte et affiche la commande à lancer : `flatpak override --user --filesystem=/mnt/data/Drive io.github.felixilgatto.Nuage`.
-- **Natif** : aucune restriction au-delà des droits de l'utilisateur.
-- Changer de dossier démonte l'ancien et remonte au nouveau.
+- One mount folder **per account**, chosen by the user (`gtk::FileDialog` or `--mount-point`). Default: `~/Cloud/<account-name>`.
+- Validations: folder empty or nonexistent (we create it), not already used by another account, not nested in another mount point, not in the cache.
+- **Flatpak, under the home**: covered by `--filesystem=home`. The FileChooser portal then returns the real path. Reject any path under `/run/user/*/doc/` with a clear message.
+- **Flatpak, outside the home** (e.g. `/mnt/data/Drive`): the app detects it and shows the command to run: `flatpak override --user --filesystem=/mnt/data/Drive io.github.felixilgatto.Nuage`.
+- **Native**: no restriction beyond the user's permissions.
+- Changing the folder unmounts the old one and remounts at the new one.
 
-### Cache local
+### Local cache
 
-- Fichiers téléchargés à la demande, dans le cache VFS de rclone (`CacheMode=full`).
-- **Limite par compte**, **20 Go par défaut**. Au-delà, les fichiers les plus anciens sont évincés. L'interface affiche aussi le total de tous les comptes.
-- Âge maximal du cache : défaut raisonnable, modifiable dans les réglages.
+- Files downloaded on demand, into rclone's VFS cache (`CacheMode=full`).
+- **Limit per account**, **20 GB by default**. Beyond that, the oldest files are evicted. The interface also shows the total for all accounts.
+- Maximum cache age: reasonable default, can be changed in the settings.
 
-### État de synchronisation, pause et quota
+### Sync status, pause and quota
 
-**État agrégé** sur tous les comptes, affiché par l'icône de la barre système et par `nuage status` :
+**Aggregated status** over all accounts, shown by the system tray icon and by `nuage status`:
 
-| Icône | État | Condition |
+| Icon | Status | Condition |
 |---|---|---|
-| ✓ | à jour | aucune écriture locale en attente d'upload |
-| ↻ | sync en cours | n fichiers en upload ou en file d'attente |
-| ⚠ | problème | erreur, compte déconnecté ou fichiers en échec |
-| ⏸ | en pause | uploads suspendus ou montage arrêté |
+| ✓ | up to date | no local write waiting to be uploaded |
+| ↻ | syncing | n files uploading or queued |
+| ⚠ | problem | error, disconnected account or failed files |
+| ⏸ | paused | uploads suspended or mount stopped |
 
-**Pause** : suspend les **uploads**, par compte ou pour tous. Le dossier reste monté et utilisable ; les écritures s'accumulent dans le cache et partent à la reprise. La pause survit à un redémarrage du démon.
+**Pause**: suspends **uploads**, per account or for all. The folder stays mounted and usable; writes pile up in the cache and are sent on resume. The pause survives a daemon restart.
 
-Mécanisme (vérifié sur rclone 1.75.2) : chaque compte est monté avec un `WriteBack` très long (ex. `8760h`), donc rclone n'envoie rien de lui-même. Quand le compte n'est pas en pause, `UploadControl` interroge `vfs/queue` toutes les 1 à 2 secondes et libère chaque nouvel élément avec `vfs/queue-set-expiry` (`expiry: -1e9`). En pause, il ne libère rien. L'état de pause est dans la config TOML de Nuage. Les écritures en attente survivent à un arrêt de rclone et sont remises en file au remontage. `core/bwlimit` est écarté : il est global et ralentit sans jamais suspendre.
+Mechanism (verified on rclone 1.75.2): each account is mounted with a very long `WriteBack` (e.g. `8760h`), so rclone sends nothing on its own. When the account is not paused, `UploadControl` polls `vfs/queue` every 1 to 2 seconds and releases each new item with `vfs/queue-set-expiry` (`expiry: -1e9`). When paused, it releases nothing. The pause state is in Nuage's TOML config. Pending writes survive an rclone shutdown and are queued again on remount. `core/bwlimit` is ruled out: it is global and slows down without ever suspending.
 
-**Quota** par compte : utilisé / total / libre / corbeille, avec un pourcentage. Champs absents si le backend ne les fournit pas.
+**Quota** per account: used / total / free / trash, with a percentage. Fields missing if the backend does not provide them.
 
-### Navigateur de fichiers unifié (GUI)
+### Unified file browser (GUI)
 
-**Un seul design pour tous les fournisseurs.** Les composants sont génériques et ne connaissent que `Entry`, `Capabilities` et les `Command` de fichiers. La navigation passe par l'API rc, **indépendamment du montage** : elle fonctionne même compte démonté.
+**A single design for all providers.** The components are generic and only know `Entry`, `Capabilities` and the file `Command`s. Browsing goes through the rc API, **independently of the mount**: it works even when the account is unmounted.
 
-**Structure** (`AdwNavigationSplitView`) :
+**Structure** (`AdwNavigationSplitView`):
 
-- **Barre latérale** : les comptes, chacun avec l'icône du fournisseur et une barre de quota. En v1.1, une entrée « Available offline » liste tous les éléments épinglés.
-- **Contenu** : fil d'Ariane, vue liste (`GtkColumnView` : nom, taille, date, état) ou vue grille (`GtkGridView`) ; le choix est mémorisé.
-- **Barre d'en-tête** : retour, chemin, filtre du dossier courant, nouveau dossier, envoyer des fichiers, menu.
+- **Sidebar**: the accounts, each with the provider's icon and a quota bar. In v1.1, an "Available offline" entry lists all pinned items.
+- **Content**: breadcrumbs, list view (`GtkColumnView`: name, size, date, status) or grid view (`GtkGridView`); the choice is remembered.
+- **Header bar**: back, path, filter for the current folder, new folder, upload files, menu.
 
-**Actions**, affichées seulement si la capacité existe :
+**Actions**, shown only if the capability exists:
 
-- ouvrir, télécharger vers…, envoyer (bouton ou glisser-déposer depuis Nautilus) ;
-- renommer, déplacer, copier, nouveau dossier ;
-- supprimer (vers la corbeille si supportée, sinon avec confirmation) ;
-- copier le lien de partage, propriétés, « Open in Files » (dossier monté) ;
-- « Exclude from sync » / « Include in sync » (voir [Exclusions](#exclusions-de-la-synchronisation)) ;
-- v1.1 : « Keep offline » / « Remove offline copy », avec icône cadenas.
+- open, download to…, upload (button or drag and drop from Nautilus);
+- rename, move, copy, new folder;
+- delete (to the trash if supported, otherwise with confirmation);
+- copy share link, properties, "Open in Files" (mounted folder);
+- "Exclude from sync" / "Include in sync" (see [Exclusions](#sync-exclusions));
+- v1.1: "Keep offline" / "Remove offline copy", with a padlock icon.
 
-**Ouvrir un fichier** : si le compte est monté, ouvrir son chemin dans le montage via le portail OpenURI (application hôte par défaut) ; sinon, le télécharger dans un dossier temporaire puis l'ouvrir. Un Google Doc natif s'ouvre dans le navigateur web.
+**Opening a file**: if the account is mounted, open its path in the mount via the OpenURI portal (default host app); otherwise, download it to a temporary folder then open it. A native Google Doc opens in the web browser.
 
-**Badges par fichier** :
+**Per-file badges**:
 
 | Badge | Version | Source |
 |---|---|---|
 | Uploading | v1 | `vfs/queue` |
-| Not synced (élément exclu, grisé) | v1 | règles d'exclusion |
-| Online only (hors connexion, non épinglé, grisé) | v1 | listings en cache |
+| Not synced (excluded item, greyed out) | v1 | exclusion rules |
+| Online only (offline, not pinned, greyed out) | v1 | cached listings |
 | Available offline / Modified locally / Conflict / Error | v1.1 | `PinState` |
 
-**Comportement** : gros dossiers chargés de façon paginée ou progressive ; aucun appel bloquant sur le thread GTK ; erreurs affichées dans un `AdwToast`.
+**Behavior**: large folders loaded with pagination or progressively; no blocking call on the GTK thread; errors shown in an `AdwToast`.
 
-### Exclusions de la synchronisation
+### Sync exclusions
 
-**Besoin.** Par compte, l'utilisateur choisit ce qu'il **ne veut pas synchroniser** :
+**Need.** Per account, the user chooses what they **do not want to sync**:
 
-- des fichiers ou dossiers distants précis (ex. un gros dossier « Archives ») ;
-- des motifs valables pour tout le compte (ex. `*.tmp`, `~$*`, `.~lock.*`, `node_modules/`, `.git/`).
+- specific remote files or folders (e.g. a large "Archives" folder);
+- patterns that apply to the whole account (e.g. `*.tmp`, `~$*`, `.~lock.*`, `node_modules/`, `.git/`).
 
-Un élément exclu n'est **ni téléchargé, ni mis en cache, ni envoyé**, et n'apparaît pas dans le dossier monté. Il reste intact sur le cloud.
+An excluded item is **neither downloaded, nor cached, nor uploaded**, and does not appear in the mounted folder. It stays intact in the cloud.
 
-**Règles :**
+**Rules:**
 
-- Motifs proposés par défaut (désactivables) : fichiers temporaires et verrous Office/LibreOffice (`~$*`, `.~lock.*#`, `*.tmp`, `.goutputstream-*`).
-- **Épingler et exclure s'excluent mutuellement.** Exclure un élément épinglé demande confirmation, puis le désépingle (après renvoi de ses modifications). Un élément exclu ne peut pas être épinglé (action masquée en GUI, erreur en CLI).
-- Persistance : config TOML de l'application, par compte (pas dans `rclone.conf`).
+- Patterns suggested by default (can be turned off): temporary files and Office/LibreOffice lock files (`~$*`, `.~lock.*#`, `*.tmp`, `.goutputstream-*`).
+- **Pinning and excluding are mutually exclusive.** Excluding a pinned item asks for confirmation, then unpins it (after uploading its changes). An excluded item cannot be pinned (action hidden in the GUI, error in the CLI).
+- Persistence: the app's TOML config, per account (not in `rclone.conf`).
 
-**Mise en œuvre :**
+**Implementation:**
 
-Les filtres rclone seuls ne suffisent pas (vérifié sur rclone 1.75.2) : `_filter` sur `mount/mount` masque bien les éléments distants exclus et empêche de les lire, mais un fichier exclu **créé localement** dans le montage est accepté **et envoyé**. D'où deux couches, dès la v1 :
+rclone filters alone are not enough (verified on rclone 1.75.2): `_filter` on `mount/mount` does hide the excluded remote items and prevents reading them, but an excluded file **created locally** in the mount is accepted **and uploaded**. Hence two layers, from v1:
 
-- **Côté distant : filtres rclone** sur le montage rclone caché (`_filter` → `ExcludeRule` / `FilterRule`). Les éléments distants exclus ne sont ni listés ni téléchargés. Modifier une exclusion **remonte le montage rclone caché** (pas le dossier de l'utilisateur, que `nuage-fs` garde en place), une fois la file d'upload vide ; sinon on demande confirmation (`--yes` en CLI).
-- **Côté local : `nuage-fs`** (voir [Système de fichiers superposé](#système-de-fichiers-superposé-nuage-fs)). Un fichier créé ou renommé localement qui correspond à une exclusion n'est jamais transmis à rclone : il est **gardé uniquement en local** (dossier `local-only`, voir [Sécurité et stockage](#sécurité-et-stockage)) et reste visible à son chemin dans le dossier monté.
+- **Remote side: rclone filters** on the hidden rclone mount (`_filter` → `ExcludeRule` / `FilterRule`). Excluded remote items are neither listed nor downloaded. Changing an exclusion **remounts the hidden rclone mount** (not the user's folder, which `nuage-fs` keeps in place), once the upload queue is empty; otherwise we ask for confirmation (`--yes` in the CLI).
+- **Local side: `nuage-fs`** (see [Overlay file system](#overlay-file-system-nuage-fs)). A file created or renamed locally that matches an exclusion is never passed to rclone: it is **kept only locally** (`local-only` folder, see [Security and storage](#security-and-storage)) and stays visible at its path in the mounted folder.
 
-**Interface :**
+**Interface:**
 
-- Navigateur : « Exclude from sync » / « Include in sync » dans le menu contextuel. Les éléments exclus restent visibles dans le navigateur (qui ne passe pas par les filtres), grisés avec le badge « Not synced », pour pouvoir les réinclure.
-- Réglages du compte : liste « Excluded from sync » (chemins et motifs), ajout d'un motif, suppression d'une règle.
-- CLI : `nuage exclude add|remove|list`.
-- Rien dans la mise en route : par défaut, tout est synchronisé.
+- Browser: "Exclude from sync" / "Include in sync" in the context menu. Excluded items stay visible in the browser (which does not go through the filters), greyed out with the "Not synced" badge, so they can be included again.
+- Account settings: "Excluded from sync" list (paths and patterns), adding a pattern, removing a rule.
+- CLI: `nuage exclude add|remove|list`.
+- Nothing in the setup: by default, everything is synced.
 
-### Système de fichiers superposé (`nuage-fs`)
+### Overlay file system (`nuage-fs`)
 
-Dès la v1, l'utilisateur ne voit **pas** directement le montage rclone. Le démon monte son propre système de fichiers FUSE (crate `fuser`) au point de montage de l'utilisateur, au-dessus d'un montage rclone caché :
+From v1, the user does **not** see the rclone mount directly. The daemon mounts its own FUSE file system (`fuser` crate) at the user's mount point, on top of a hidden rclone mount:
 
 ```
-~/Cloud/Google Drive                  ← dossier vu par l'utilisateur (nuage-fs)
-   ├─ élément exclu, créé localement  → dossier local-only (v1)
-   ├─ élément épinglé                  → magasin d'épingles local (v1.1)
-   └─ tout le reste                    → relayé au montage rclone caché
-                                          data/mounts/<compte>  (cache VFS limité, filtres d'exclusion)
+~/Cloud/Google Drive                  ← folder seen by the user (nuage-fs)
+   ├─ excluded item, created locally  → local-only folder (v1)
+   ├─ pinned item                      → local pin store (v1.1)
+   └─ everything else                  → relayed to the hidden rclone mount
+                                          data/mounts/<account>  (limited VFS cache, exclusion filters)
 ```
 
-**v1 : relais + exclusions.**
+**v1: relay + exclusions.**
 
-- Relais transparent de toutes les opérations vers le montage rclone caché (lecture, écriture, renommage, attributs, listing), sans régression de performance perceptible ni de comportement par rapport à un montage rclone direct.
-- Interception des créations et renommages qui correspondent à une exclusion : ces fichiers vont dans `local-only` et ne sont jamais vus par rclone. Leur listing est fusionné avec celui de rclone.
-- Le montage utilisateur reste en place quand le montage rclone caché est remonté (changement d'exclusions, reconnexion) : les accès en cours attendent ou échouent proprement, sans que le dossier disparaisse.
-- Dans le Flatpak, `nuage-fs` passe par le même wrapper `fusermount3` que rclone : aucune permission supplémentaire.
+- Transparent relay of all operations to the hidden rclone mount (read, write, rename, attributes, listing), with no noticeable regression in performance or behavior compared with a direct rclone mount.
+- Interception of creations and renames that match an exclusion: these files go to `local-only` and are never seen by rclone. Their listing is merged with rclone's.
+- The user mount stays in place when the hidden rclone mount is remounted (exclusion change, reconnection): ongoing accesses wait or fail cleanly, without the folder disappearing.
+- In the Flatpak, `nuage-fs` goes through the same `fusermount3` wrapper as rclone: no extra permission.
 
-**v1.1 : épinglage hors ligne**, décrit ci-dessous.
+**v1.1: offline pinning**, described below.
 
-C'est la brique la plus délicate du projet. Elle doit être couverte par des tests d'intégration dédiés (relais, exclusions, remontage) avec le fournisseur `local`, et passer une suite de tests de système de fichiers (ex. `pjdfstest` ou équivalent, au minimum les cas lecture/écriture/renommage/suppression).
+This is the most delicate building block of the project. It must be covered by dedicated integration tests (relay, exclusions, remount) with the `local` provider, and pass a file system test suite (e.g. `pjdfstest` or equivalent, at minimum the read/write/rename/delete cases).
 
-### Mode hors ligne (v1.1)
+### Offline mode (v1.1)
 
-**Besoin.** L'utilisateur **épingle** un fichier ou un dossier. L'élément reste **au même chemin dans le dossier monté** et s'ouvre et se modifie **sans réseau**, y compris **après un redémarrage hors ligne**. C'est l'équivalent du « Disponible hors connexion » de OneDrive ou de Google Drive pour ordinateur. Les éléments épinglés sont **hors du cache** : jamais évincés, quelle que soit la limite.
+**Need.** The user **pins** a file or a folder. The item stays **at the same path in the mounted folder** and can be opened and modified **without network**, including **after an offline restart**. This is the equivalent of the "Available offline" of OneDrive or Google Drive for desktop. Pinned items are **outside the cache**: never evicted, whatever the limit.
 
-**Pourquoi le cache VFS de rclone ne suffit pas :**
+**Why rclone's VFS cache is not enough:**
 
-- il n'a **pas d'épinglage** : un fichier peut être évincé dès que le cache atteint sa limite ;
-- le cache des répertoires est **en mémoire** : après un redémarrage sans réseau, rclone ne peut plus lister les dossiers et les fichiers en cache deviennent inaccessibles par leur chemin ;
-- le montage rclone peut **refuser de démarrer** si le backend est injoignable (rafraîchissement du token) ;
-- les modifications hors ligne sont renvoyées en « le dernier qui écrit gagne », sans détection de conflit.
+- it has **no pinning**: a file can be evicted as soon as the cache reaches its limit;
+- the directory cache is **in memory**: after a restart without network, rclone can no longer list folders and cached files become inaccessible by their path;
+- the rclone mount may **refuse to start** if the backend is unreachable (token refresh);
+- offline changes are uploaded on a "last writer wins" basis, without conflict detection.
 
-**Conception retenue : l'épinglage est ajouté à `nuage-fs`** (voir [Système de fichiers superposé](#système-de-fichiers-superposé-nuage-fs)). Les éléments épinglés sont lus et écrits dans un magasin local ; le reste continue d'être relayé à rclone.
+**Chosen design: pinning is added to `nuage-fs`** (see [Overlay file system](#overlay-file-system-nuage-fs)). Pinned items are read and written in a local store; the rest is still relayed to rclone.
 
-| Situation | Comportement |
+| Situation | Behavior |
 |---|---|
-| Lecture d'un fichier épinglé | depuis le magasin d'épingles |
-| Lecture d'un fichier non épinglé | relayée à rclone ; hors ligne → erreur propre (`EHOSTUNREACH`), l'élément reste listé grâce aux métadonnées |
-| Écriture sur un fichier épinglé | écrite localement, marquée « modifiée », renvoyée par `operations/copyfile` dès le retour du réseau (sauf en pause) |
-| Écriture sur un fichier non épinglé | relayée à rclone (son cache d'écriture différée gère l'upload) |
-| Changement distant d'un élément épinglé | détecté par vérification périodique (`operations/list` avec hash et date, intervalle réglable), nouvelle version téléchargée |
-| Changement des deux côtés depuis l'état de référence | **conflit** : on garde les deux versions (`report (conflict 2026-10-29 18-45).docx`), jamais de perte, et une notification |
-| Nouveau fichier dans un dossier épinglé (local ou distant) | épinglé automatiquement (l'épinglage d'un dossier est récursif) |
-| Démarrage sans réseau | `nuage-fs` se monte à partir des métadonnées même si rclone échoue, puis bascule sur rclone dès qu'il est disponible |
-| Désépinglage | la copie locale est libérée une fois les modifications locales renvoyées |
+| Reading a pinned file | from the pin store |
+| Reading an unpinned file | relayed to rclone; offline → clean error (`EHOSTUNREACH`), the item stays listed thanks to the metadata |
+| Writing to a pinned file | written locally, marked "modified", uploaded by `operations/copyfile` as soon as the network is back (unless paused) |
+| Writing to an unpinned file | relayed to rclone (its write-back cache handles the upload) |
+| Remote change to a pinned item | detected by periodic check (`operations/list` with hash and date, adjustable interval), new version downloaded |
+| Change on both sides since the reference state | **conflict**: both versions are kept (`report (conflict 2026-10-29 18-45).docx`), never any loss, and a notification |
+| New file in a pinned folder (local or remote) | pinned automatically (pinning a folder is recursive) |
+| Startup without network | `nuage-fs` mounts from the metadata even if rclone fails, then switches to rclone as soon as it is available |
+| Unpinning | the local copy is released once the local changes are uploaded |
 
-**Stockage :**
+**Storage:**
 
-- **Magasin d'épingles** : copies complètes, hors de la limite du cache VFS.
-- **Métadonnées** (SQLite, `rusqlite`) : liste des épingles ; pour chaque fichier épinglé, son état de référence (taille, date, hash distant, hash local) ; **les listings de dossiers** (au minimum ceux des éléments épinglés et de leurs parents) pour que l'arborescence reste navigable hors ligne et après un redémarrage.
-- **Espace** : la taille du magasin est affichée à part du cache (« Offline: 4.2 GB »), avec un avertissement optionnel au-delà d'un seuil choisi par l'utilisateur.
+- **Pin store**: full copies, outside the VFS cache limit.
+- **Metadata** (SQLite, `rusqlite`): list of pins; for each pinned file, its reference state (size, date, remote hash, local hash); **folder listings** (at minimum those of the pinned items and their parents) so that the tree stays browsable offline and after a restart.
+- **Space**: the size of the store is shown separately from the cache ("Offline: 4.2 GB"), with an optional warning beyond a threshold chosen by the user.
 
-C'est le jalon le plus lourd du projet : une partie de Nuage devient un vrai client de sync (sur les seuls éléments épinglés). Les transferts restent délégués à rclone.
+This is the heaviest milestone of the project: part of Nuage becomes a real sync client (for pinned items only). Transfers are still delegated to rclone.
 
-**Interface :**
+**Interface:**
 
-- Navigateur : « Keep offline » / « Remove offline copy » (menu contextuel et bouton cadenas), badges d'état, entrée « Available offline » dans la barre latérale.
-- Réglages du compte : liste « Available offline » des éléments épinglés, avec leur taille et l'action « Remove offline copy ».
-- Tray : nombre d'éléments épinglés en attente d'envoi ou en conflit.
-- Réglages : intervalle de vérification, seuil d'avertissement d'espace.
-- CLI : `nuage pin add|remove|list`.
+- Browser: "Keep offline" / "Remove offline copy" (context menu and padlock button), status badges, "Available offline" entry in the sidebar.
+- Account settings: "Available offline" list of pinned items, with their size and the "Remove offline copy" action.
+- Tray: number of pinned items waiting to be uploaded or in conflict.
+- Settings: check interval, space warning threshold.
+- CLI: `nuage pin add|remove|list`.
 
 ## CLI (`nuage`)
 
-La CLI est l'interface du mode headless et un outil de script sur le bureau. Elle doit pouvoir être **installée et utilisée de bout en bout par un agent** (ex. Claude Code) dans une session SSH.
+The CLI is the interface of the headless mode and a scripting tool on the desktop. It must be possible for **an agent** (e.g. Claude Code) **to install and use it end to end** in an SSH session.
 
-**Règles :**
+**Rules:**
 
-- **Jamais d'invite interactive obligatoire** : tout passe par des arguments. Les confirmations deviennent `--yes`. Si l'entrée standard n'est pas un terminal et qu'une confirmation manque, la commande échoue avec un message qui indique l'option à ajouter.
-- **`--json` sur toutes les commandes** : sortie stable et documentée, pour les scripts. Sans `--json`, sortie lisible et sans couleur si la sortie n'est pas un terminal.
-- **Codes de retour documentés** : `0` succès, `1` erreur, `2` usage incorrect, `3` démon injoignable, `4` authentification requise (liste complète dans `docs/CLI.md`).
-- Les comptes se désignent par leur nom ; les chemins distants s'écrivent `<compte>:<chemin>`.
-- Démon absent : message clair avec la commande pour le démarrer (`systemctl --user start nuaged`).
+- **Never a mandatory interactive prompt**: everything goes through arguments. Confirmations become `--yes`. If standard input is not a terminal and a confirmation is missing, the command fails with a message that names the option to add.
+- **`--json` on every command**: stable and documented output, for scripts. Without `--json`, readable output, without color if the output is not a terminal.
+- **Documented exit codes**: `0` success, `1` error, `2` incorrect usage, `3` daemon unreachable, `4` authentication required (full list in `docs/CLI.md`).
+- Accounts are referred to by their name; remote paths are written `<account>:<path>`.
+- Daemon missing: clear message with the command to start it (`systemctl --user start nuaged`).
 
-**Commandes (v1) :**
+**Commands (v1):**
 
 ```
-nuage status [--watch]                         état global, par compte, uploads, quota, cache
-nuage account add <fournisseur> [--name N] [--mount-point P]
+nuage status [--watch]                         overall status, per account, uploads, quota, cache
+nuage account add <provider> [--name N] [--mount-point P]
                      [--token JSON | --token-file F] [--client-id ID --client-secret S] [--no-browser]
-nuage account list | rename <compte> <nom> | reconnect <compte> | remove <compte> --yes [--force]
-nuage mount <compte> | unmount <compte>
-nuage pause [<compte>] | resume [<compte>]
-nuage refresh [<compte>]
-nuage ls | mkdir | mv | cp | rm | upload | download | link   opérations sur <compte>:<chemin>
-nuage exclude add <compte> (<chemin> | --glob <motif>) | remove | list
-nuage config get | set <clé> <valeur>                     ex. cache limit, âge du cache
+nuage account list | rename <account> <name> | reconnect <account> | remove <account> --yes [--force]
+nuage mount <account> | unmount <account>
+nuage pause [<account>] | resume [<account>]
+nuage refresh [<account>]
+nuage ls | mkdir | mv | cp | rm | upload | download | link   operations on <account>:<path>
+nuage exclude add <account> (<path> | --glob <pattern>) | remove | list
+nuage config get | set <key> <value>                     e.g. cache limit, cache age
 nuage daemon status | stop
 nuage pin add | remove | list                             (v1.1)
 ```
 
 ## Interface (GNOME / libadwaita)
 
-Rappel : [interface minimaliste](#principes). Valeurs par défaut jamais demandées pendant la mise en route : limite de cache (20 Go), âge du cache, intervalle de vérification hors ligne, exclusions.
+Reminder: [minimalist interface](#principles). Default values never asked during setup: cache limit (20 GB), cache age, offline check interval, exclusions.
 
-### Mise en route (premier lancement et « Add account »)
+### Setup (first launch and "Add account")
 
-Objectif : **compte connecté et synchronisation lancée sans quitter la fenêtre, avec le minimum d'écrans** : 4 pour un premier compte Google, 3 ensuite ou pour un fournisseur qui n'a pas besoin de client OAuth. Une seule fenêtre (`AdwNavigationView`, bouton retour à chaque étape).
+Goal: **account connected and sync started without leaving the window, with the minimum number of screens**: 4 for a first Google account, 3 after that or for a provider that does not need an OAuth client. A single window (`AdwNavigationView`, back button at every step).
 
-1. **Choisir un fournisseur** : la liste des fournisseurs du registre (icône + nom). Un clic passe à l'étape suivante. Rien d'autre à l'écran.
-2. **Créer son client Google** (premier compte Google seulement) :
-   - étapes numérotées et courtes : créer un projet, activer l'API Drive, configurer l'écran de consentement et le **publier en Production**, créer des identifiants « Desktop app » ; chaque étape a un bouton qui ouvre la bonne page de la console GCP ;
-   - deux champs « Client ID » et « Client secret » ; le bouton « Continue » reste désactivé tant qu'ils n'ont pas le bon format ;
-   - le client est mémorisé : les comptes Google suivants sautent cet écran (modifiable dans les réglages).
-3. **S'authentifier** :
-   - le navigateur s'ouvre automatiquement (OAuth rclone avec le client de l'utilisateur) ;
-   - l'écran affiche un spinner « Waiting for sign-in in your browser… », un bouton « Cancel » et un lien « Copy sign-in link » au cas où le navigateur ne s'ouvre pas ;
-   - on passe automatiquement à l'étape suivante dès que le token est reçu ;
-   - si Google refuse le client (identifiants faux, projet en *Testing*), retour à l'étape 2 avec un message qui dit quoi corriger ;
-   - pour un fournisseur à identifiants (`AuthSpec::Credentials`), cet écran est le formulaire.
-4. **Lancer la synchronisation** :
-   - **Dossier** : un `AdwActionRow` affiche le dossier pré-rempli (`~/Cloud/<nom-du-compte>`) avec un bouton « Choose… » (`gtk::FileDialog`). Validations de [Montage et dossier de montage](#montage-et-dossier-de-montage) ; erreur affichée sous la ligne ; bouton principal désactivé tant que le dossier est invalide.
-   - **« Start automatically at login »** (`AdwSwitchRow`), **activé par défaut**. Il déclenche la demande au portail Background ; si le portail refuse, l'interrupteur se désactive et un toast explique pourquoi. C'est un réglage global (pas par compte), affiché seulement lors de l'ajout du premier compte, modifiable ensuite dans les réglages.
-   - Bouton principal **« Start sync »** (`suggested-action`) : crée le dossier si besoin et monte le compte ; pendant ce temps il affiche un spinner (« Setting up the folder… ») et le formulaire est verrouillé. La fenêtre reste ouverte et revient à la liste des comptes, avec un toast « Google Drive is ready in ~/Cloud/Google Drive » et son action « Open Folder » ; si la fenêtre n'est plus au premier plan, la même chose part aussi en notification. (Jusqu'au polish 1, la fenêtre se fermait : la mise en route semblait avoir échoué.)
+1. **Choose a provider**: the list of providers in the registry (icon + name). A click moves to the next step. Nothing else on the screen.
+2. **Create your Google client** (first Google account only):
+   - short, numbered steps: create a project, enable the Drive API, configure the consent screen and **publish it in Production**, create "Desktop app" credentials; each step has a button that opens the right page of the GCP console;
+   - two fields, "Client ID" and "Client secret"; the "Continue" button stays disabled as long as they do not have the right format;
+   - the client is remembered: subsequent Google accounts skip this screen (can be changed in the settings).
+3. **Sign in**:
+   - the browser opens automatically (rclone OAuth with the user's client);
+   - the screen shows a spinner "Waiting for sign-in in your browser…", a "Cancel" button and a "Copy sign-in link" link in case the browser does not open;
+   - it moves to the next step automatically as soon as the token is received;
+   - if Google refuses the client (wrong credentials, project in *Testing*), back to step 2 with a message that says what to fix;
+   - for a credential-based provider (`AuthSpec::Credentials`), this screen is the form.
+4. **Start the sync**:
+   - **Folder**: an `AdwActionRow` shows the prefilled folder (`~/Cloud/<account-name>`) with a "Choose…" button (`gtk::FileDialog`). Validations from [Mounting and mount folder](#mounting-and-mount-folder); error shown below the row; main button disabled as long as the folder is invalid.
+   - **"Start automatically at login"** (`AdwSwitchRow`), **on by default**. It triggers the request to the Background portal; if the portal refuses, the switch turns off and a toast explains why. It is a global setting (not per account), shown only when adding the first account, and can be changed later in the settings.
+   - Main button **"Start sync"** (`suggested-action`): creates the folder if needed and mounts the account; meanwhile it shows a spinner ("Setting up the folder…") and the form is locked. The window stays open and goes back to the list of accounts, with a toast "Google Drive is ready in ~/Cloud/Google Drive" and its "Open Folder" action; if the window is no longer in the foreground, the same thing is also sent as a notification. (Until polish 1, the window closed: the setup seemed to have failed.)
 
-Aux lancements suivants, si au moins un compte existe, l'application lancée par l'utilisateur ouvre la fenêtre principale ; démarrée à la connexion (`--background`), elle reste dans la barre système, fenêtre fermée (décidé au jalon 8).
+On later launches, if at least one account exists, the app launched by the user opens the main window; started at login (`--background`), it stays in the system tray, with the window closed (decided at milestone 8).
 
-### Fenêtre principale
+### Main window
 
-Minimale : la liste des comptes (icône, nom, état ✓/↻/⚠/⏸, barre de quota, bouton « Open folder ») et un bouton « + » pour ajouter un compte. Le navigateur s'ouvre depuis un compte ; il n'est jamais affiché d'office. Les réglages sont dans le menu principal. Fermer la fenêtre n'arrête pas la sync.
+Minimal: the list of accounts (icon, name, ✓/↻/⚠/⏸ status, quota bar, "Open folder" button) and a "+" button to add an account. The browser opens from an account; it is never shown by default. The settings are in the main menu. Closing the window does not stop the sync.
 
-### Menu de l'icône de barre système
+### System tray icon menu
 
-- État global
-- Par compte : quota, taille du cache local, taille hors ligne (v1.1)
-- « Open Nuage » (fenêtre principale)
-- « Open folder » (dossier monté)
-- « Refresh »
-- « Pause uploads » / « Resume uploads »
-- « Preferences »
-- « Add account »
-- « Quit »
+- Overall status
+- Per account: quota, local cache size, offline size (v1.1)
+- "Open Nuage" (main window)
+- "Open folder" (mounted folder)
+- "Refresh"
+- "Pause uploads" / "Resume uploads"
+- "Preferences"
+- "Add account"
+- "Quit"
 
-Sur Ubuntu, l'extension AppIndicator est active par défaut et l'icône s'affiche. Sur un GNOME sans extension, la fenêtre principale doit suffire à tout faire.
+On Ubuntu, the AppIndicator extension is enabled by default and the icon is shown. On a GNOME without the extension, the main window must be enough to do everything.
 
 ### Quit
 
-« Quit » arrête l'application et le démon (démontage puis arrêt de rclone). S'il reste des uploads en attente, le comportement se règle dans les réglages (« When quitting with pending uploads ») :
+"Quit" stops the app and the daemon (unmounting, then stopping rclone). If uploads are still pending, the behavior is set in the settings ("When quitting with pending uploads"):
 
-| Option | Effet |
+| Option | Effect |
 |---|---|
-| **Finish in background** (défaut) | la fenêtre et l'icône disparaissent ; le démon termine les uploads, puis démonte et s'arrête |
-| Ask | dialogue « N files are still uploading » : Wait / Quit now |
-| Quit now | arrêt immédiat ; les uploads restent dans le cache rclone et reprennent au prochain lancement |
+| **Finish in background** (default) | the window and the icon disappear; the daemon finishes the uploads, then unmounts and stops |
+| Ask | "N files are still uploading" dialog: Wait / Quit now |
+| Quit now | immediate stop; the uploads stay in the rclone cache and resume at the next launch |
 
-En CLI, `nuage daemon stop` applique le même réglage ; `--now` force l'arrêt immédiat.
+In the CLI, `nuage daemon stop` applies the same setting; `--now` forces an immediate stop.
 
-### Réglages (`AdwPreferencesDialog`)
+### Settings (`AdwPreferencesDialog`)
 
-- Global : démarrage automatique, comportement de « Quit », client OAuth, intervalle de vérification hors ligne (v1.1), seuil d'avertissement d'espace hors ligne (v1.1).
-- Par compte : nom, dossier de montage, limite du cache, âge maximal du cache, exclusions, éléments épinglés (v1.1), suppression du compte.
+- Global: autostart, "Quit" behavior, OAuth client, offline check interval (v1.1), offline space warning threshold (v1.1).
+- Per account: name, mount folder, cache limit, maximum cache age, exclusions, pinned items (v1.1), account removal.
 
-### Notifications (portail Notification)
+### Notifications (Notification portal)
 
-Erreur d'upload, token expiré, cache plein, conflit hors ligne (v1.1). En headless, ces événements apparaissent dans `nuage status` et dans le journal du service (`journalctl --user -u nuaged`).
+Upload error, expired token, full cache, offline conflict (v1.1). In headless mode, these events appear in `nuage status` and in the service journal (`journalctl --user -u nuaged`).
 
-## Sécurité et stockage
+## Security and storage
 
-- `rclone.conf` est chiffré avec `RCLONE_CONFIG_PASS`. Le mot de passe est rangé dans le trousseau : portail Secret (`ashpd`) dans le Flatpak, Secret Service (`org.freedesktop.secrets`) en natif s'il est disponible.
-- **Headless sans trousseau** : `rclone.conf` n'est pas chiffré mais protégé en `0600` (comme rclone par défaut). `nuage status` le signale et le README l'explique.
-- rclone obscurcit les mots de passe (WebDAV, Nextcloud, Proton) de façon réversible, mais pas les clés secrètes S3 ni les tokens OAuth : seul le chiffrement de `rclone.conf` les protège vraiment.
-- API rc sur 127.0.0.1, port et identifiants aléatoires à chaque lancement, jamais `--rc-no-auth`.
-- Socket IPC en `0600`, accessible au seul utilisateur.
-- Aucun token ni mot de passe dans les logs (filtre `tracing`).
+- `rclone.conf` is encrypted with `RCLONE_CONFIG_PASS`. The password is stored in the keyring: Secret portal (`ashpd`) in the Flatpak, Secret Service (`org.freedesktop.secrets`) in native mode if it is available.
+- **Headless without a keyring**: `rclone.conf` is not encrypted but protected with `0600` (like rclone by default). `nuage status` reports it and the README explains it.
+- rclone obscures passwords (WebDAV, Nextcloud, Proton) in a reversible way, but not S3 secret keys or OAuth tokens: only the encryption of `rclone.conf` really protects them.
+- rc API on 127.0.0.1, random port and credentials at every launch, never `--rc-no-auth`.
+- IPC socket with `0600`, accessible to the user only.
+- No token or password in the logs (`tracing` filter).
 
-**Emplacements** (Flatpak : `~/.var/app/io.github.felixilgatto.Nuage/{config,cache,data}` ; natif : répertoires XDG `~/.config/nuage`, `~/.cache/nuage`, `~/.local/share/nuage`) :
+**Locations** (Flatpak: `~/.var/app/io.github.felixilgatto.Nuage/{config,cache,data}`; native: XDG directories `~/.config/nuage`, `~/.cache/nuage`, `~/.local/share/nuage`):
 
-| Contenu | Sous-dossier | Version |
+| Contents | Subfolder | Version |
 |---|---|---|
-| Config rclone (`RCLONE_CONFIG`) | `config/rclone/rclone.conf` (natif : `~/.config/nuage/rclone.conf`) | v1 |
-| Config de l'application (TOML : comptes, exclusions, réglages) | `config/nuage/` (natif : `~/.config/nuage/`) | v1 |
-| Cache VFS (`--cache-dir`) | `cache/rclone` | v1 |
-| Montages rclone cachés | `data/mounts/<compte>` | v1 |
-| Magasin d'épingles | `data/pins/<compte>/…` | v1.1 |
-| Fichiers exclus gardés en local | `data/local-only/<compte>/…` | v1 |
-| Métadonnées hors ligne (SQLite) | `data/` | v1.1 |
+| rclone config (`RCLONE_CONFIG`) | `config/rclone/rclone.conf` (native: `~/.config/nuage/rclone.conf`) | v1 |
+| App config (TOML: accounts, exclusions, settings) | `config/nuage/` (native: `~/.config/nuage/`) | v1 |
+| VFS cache (`--cache-dir`) | `cache/rclone` | v1 |
+| Hidden rclone mounts | `data/mounts/<account>` | v1 |
+| Pin store | `data/pins/<account>/…` | v1.1 |
+| Excluded files kept locally | `data/local-only/<account>/…` | v1 |
+| Offline metadata (SQLite) | `data/` | v1.1 |
 
-## Stack technique
+## Tech stack
 
-| Rôle | Crate | Remarque |
+| Role | Crate | Note |
 |---|---|---|
-| UI | `gtk4`, `libadwaita` (gtk-rs), sans relm4 | sous-classes GObject, fichiers `.ui` ou Blueprint |
-| Tray | `ksni` | StatusNotifierItem + dbusmenu en pur Rust (GTK4 n'a pas d'AppIndicator) |
-| Portails | `ashpd` | Background, OpenURI, Notification, Secret, FileChooser |
-| CLI | `clap` | sous-commandes, `--json` |
-| IPC | `tokio` (`UnixListener`), `serde_json` | JSON délimité par lignes |
-| HTTP vers rc | `reqwest` (rustls) | |
-| Async | `tokio` ; côté GTK, `async-channel` vers la boucle GLib | ne jamais bloquer le thread GTK |
-| Sérialisation | `serde`, `serde_json`, `toml` | |
-| FUSE superposé (`nuage-fs`) | `fuser` | v1 |
-| Métadonnées hors ligne (v1.1) | `rusqlite` (feature `bundled`) | |
-| i18n | `gettext-rs` | chaînes en anglais, prêtes à traduire |
-| Erreurs | `thiserror` (crates), `anyhow` (binaires) | |
-| Logs | `tracing` | journald quand lancé par systemd |
-| Paquet `.deb` | `cargo-deb` | |
+| UI | `gtk4`, `libadwaita` (gtk-rs), without relm4 | GObject subclasses, `.ui` or Blueprint files |
+| Tray | `ksni` | StatusNotifierItem + dbusmenu in pure Rust (GTK4 has no AppIndicator) |
+| Portals | `ashpd` | Background, OpenURI, Notification, Secret, FileChooser |
+| CLI | `clap` | subcommands, `--json` |
+| IPC | `tokio` (`UnixListener`), `serde_json` | newline-delimited JSON |
+| HTTP to rc | `reqwest` (rustls) | |
+| Async | `tokio`; on the GTK side, `async-channel` to the GLib loop | never block the GTK thread |
+| Serialization | `serde`, `serde_json`, `toml` | |
+| Overlay FUSE (`nuage-fs`) | `fuser` | v1 |
+| Offline metadata (v1.1) | `rusqlite` (`bundled` feature) | |
+| i18n | `gettext-rs` | strings in English, ready to translate |
+| Errors | `thiserror` (crates), `anyhow` (binaries) | |
+| Logs | `tracing` | journald when launched by systemd |
+| `.deb` package | `cargo-deb` | |
 
 ## Packaging
 
-### Flatpak (bureau)
+### Flatpak (desktop)
 
-Manifeste YAML dans `build-aux/flatpak/` :
+YAML manifest in `build-aux/flatpak/`:
 
-- runtime `org.gnome.Platform` (dernière version stable) ;
-- extension `org.freedesktop.Sdk.Extension.rust-stable` ;
-- dépendances Cargo vendorisées avec `flatpak-cargo-generator` (`cargo-sources.json`), build hors ligne ;
+- runtime `org.gnome.Platform` (latest stable version);
+- extension `org.freedesktop.Sdk.Extension.rust-stable`;
+- Cargo dependencies vendored with `flatpak-cargo-generator` (`cargo-sources.json`), offline build;
 - `command: nuage-gtk`.
 
-Modules :
+Modules:
 
-1. `rclone` : binaire officiel avec sha256 épinglé (ou build Go via l'extension golang), installé dans `/app/bin`.
-2. `fusermount-wrapper` : script installé en `/app/bin/fusermount3`.
-3. `nuage` : `cargo build --release --offline` (`nuaged`, `nuage`, `nuage-gtk`), `.desktop`, icône, `metainfo.xml`.
+1. `rclone`: official binary with pinned sha256 (or Go build via the golang extension), installed in `/app/bin`.
+2. `fusermount-wrapper`: script installed as `/app/bin/fusermount3`.
+3. `nuage`: `cargo build --release --offline` (`nuaged`, `nuage`, `nuage-gtk`), `.desktop`, icon, `metainfo.xml`.
 
-`finish-args` (minimaux) :
+`finish-args` (minimal):
 
 ```yaml
 - --socket=wayland
@@ -649,189 +649,189 @@ Modules :
 - --device=dri
 - --share=ipc
 - --share=network
-- --talk-name=org.freedesktop.Flatpak        # wrapper fusermount3 uniquement
-- --talk-name=org.kde.StatusNotifierWatcher  # icône de barre système
-- --talk-name=org.freedesktop.secrets        # repli si le portail Secret manque
-- --filesystem=home                          # dossiers de montage choisis librement
+- --talk-name=org.freedesktop.Flatpak        # fusermount3 wrapper only
+- --talk-name=org.kde.StatusNotifierWatcher  # system tray icon
+- --talk-name=org.freedesktop.secrets        # fallback if the Secret portal is missing
+- --filesystem=home                          # freely chosen mount folders
 ```
 
-Jamais de `--filesystem=host`.
+Never `--filesystem=host`.
 
-### Natif (headless)
+### Native (headless)
 
-- **Tarball** `nuage-<version>-x86_64-linux.tar.gz` : `nuaged`, `nuage`, `rclone` (même version épinglée que le Flatpak), `nuaged.service` (unit systemd utilisateur), script `install.sh` qui installe dans `~/.local` sans `sudo`.
-- **`.deb`** (`cargo-deb`) : mêmes binaires dans `/usr/bin` (rclone dans `/usr/lib/nuage/` pour ne pas entrer en conflit avec le rclone d'apt), unit dans `/usr/lib/systemd/user/`, dépendance `fuse3`.
-- Binaires liés statiquement autant que possible (musl à évaluer), sans aucune dépendance GTK.
-- Installation type, documentée dans le README :
+- **Tarball** `nuage-<version>-x86_64-linux.tar.gz`: `nuaged`, `nuage`, `rclone` (same pinned version as the Flatpak), `nuaged.service` (systemd user unit), `install.sh` script that installs into `~/.local` without `sudo`.
+- **`.deb`** (`cargo-deb`): same binaries in `/usr/bin` (rclone in `/usr/lib/nuage/` so as not to conflict with apt's rclone), unit in `/usr/lib/systemd/user/`, `fuse3` dependency.
+- Binaries statically linked as much as possible (musl to be evaluated), without any GTK dependency.
+- Typical installation, documented in the README:
 
 ```
-sudo apt install ./nuage_<version>_amd64.deb        # ou : tar xf … && ./install.sh
+sudo apt install ./nuage_<version>_amd64.deb        # or: tar xf … && ./install.sh
 systemctl --user enable --now nuaged
-loginctl enable-linger "$USER"                         # pour tourner sans session ouverte
+loginctl enable-linger "$USER"                         # to run without an open session
 nuage account add gdrive --token-file token.json --mount-point ~/Cloud/Drive
 nuage status
 ```
 
 ## CI (GitHub Actions)
 
-Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucun identifiant cloud en CI** : les tests utilisent le fournisseur `local`/`memory`.
+Workflows in `.github/workflows/`, on the `felixilgatto/nuage` repository. **No cloud credentials in CI**: tests use the `local`/`memory` provider.
 
-### `ci.yml` — à chaque push et pull request
+### `ci.yml` — on every push and pull request
 
-**Job `check`** (runner `ubuntu-24.04` avec `libgtk-4-dev libadwaita-1-dev`, ou conteneur du SDK GNOME pour avoir les mêmes versions que le Flatpak) :
+**`check` job** (`ubuntu-24.04` runner with `libgtk-4-dev libadwaita-1-dev`, or GNOME SDK container to have the same versions as the Flatpak):
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `cargo test --workspace` : tests unitaires + tests d'intégration contre un vrai `rclone rcd` (même version que dans les paquets) avec le fournisseur `local` : création de compte, montage FUSE (disponible sur les runners Ubuntu), `vfs/stats`, pause/reprise, navigation, opérations fichiers, exclusions ; en v1.1, scénarios hors ligne d'`nuage-fs`.
-- **Tests de bout en bout de la CLI** : démarrer `nuaged`, piloter un scénario complet avec `nuage … --json` (ajout de compte `local`, montage, écriture, `status`, pause, exclusion, suppression), vérifier sorties JSON et codes de retour.
-- `cargo deny check` (licences compatibles MIT, avis de sécurité, doublons) via `EmbarkStudios/cargo-deny-action`.
-- Règles de dépendance entre crates : script sur `cargo metadata` qui échoue si le [tableau des dépendances](#workspace-cargo) n'est pas respecté, ou si `daemon`/`cli` tirent une dépendance GTK.
-- Cache Cargo : `Swatinem/rust-cache`.
+- `cargo test --workspace`: unit tests + integration tests against a real `rclone rcd` (same version as in the packages) with the `local` provider: account creation, FUSE mount (available on Ubuntu runners), `vfs/stats`, pause/resume, browsing, file operations, exclusions; in v1.1, offline scenarios of `nuage-fs`.
+- **CLI end-to-end tests**: start `nuaged`, drive a full scenario with `nuage … --json` (adding a `local` account, mounting, writing, `status`, pause, exclusion, removal), check JSON outputs and exit codes.
+- `cargo deny check` (MIT-compatible licenses, security advisories, duplicates) via `EmbarkStudios/cargo-deny-action`.
+- Dependency rules between crates: script on `cargo metadata` that fails if the [dependency table](#cargo-workspace) is not respected, or if `daemon`/`cli` pull in a GTK dependency.
+- Cargo cache: `Swatinem/rust-cache`.
 
-**Job `native`** : build de `nuaged` et `nuage` sans GTK sur une image Ubuntu minimale, production du tarball et du `.deb` en artefacts, puis installation du `.deb` dans un conteneur propre et smoke test (`nuage --version`, démarrage du démon, `nuage status --json`).
+**`native` job**: build of `nuaged` and `nuage` without GTK on a minimal Ubuntu image, production of the tarball and the `.deb` as artifacts, then installation of the `.deb` in a clean container and smoke test (`nuage --version`, daemon startup, `nuage status --json`).
 
-**Job `flatpak`** (conteneur `ghcr.io/flathub-infra/flatpak-github-actions:gnome-<version>`, action `flatpak/flatpak-github-actions/flatpak-builder`) :
+**`flatpak` job** (container `ghcr.io/flathub-infra/flatpak-github-actions:gnome-<version>`, action `flatpak/flatpak-github-actions/flatpak-builder`):
 
-- vérifie que `cargo-sources.json` est à jour (régénération puis `git diff --exit-code`) ;
-- construit le manifeste et publie le bundle `nuage.flatpak` en artefact ;
-- lance `flatpak-builder-lint` sur le manifeste et le dépôt construit (AppStream, permissions). En v1, les avertissements sur `org.freedesktop.Flatpak` et `home` sont tolérés et documentés.
+- checks that `cargo-sources.json` is up to date (regeneration then `git diff --exit-code`);
+- builds the manifest and publishes the `nuage.flatpak` bundle as an artifact;
+- runs `flatpak-builder-lint` on the manifest and the built repository (AppStream, permissions). In v1, the warnings about `org.freedesktop.Flatpak` and `home` are tolerated and documented.
 
-### `release.yml` — sur tag `v*`
+### `release.yml` — on `v*` tags
 
-- Rejoue les builds Flatpak et natif.
-- Publie une GitHub Release avec le bundle `.flatpak`, le tarball, le `.deb`, leurs sommes sha256 et le changelog extrait de `CHANGELOG.md`.
+- Reruns the Flatpak and native builds.
+- Publishes a GitHub Release with the `.flatpak` bundle, the tarball, the `.deb`, their sha256 sums and the changelog extracted from `CHANGELOG.md`.
 
-### Divers
+### Miscellaneous
 
-- `dependabot.yml` : mises à jour hebdomadaires `cargo` et `github-actions`.
-- Actions épinglées (tag majeur au minimum, SHA idéalement).
-- `GITHUB_TOKEN` minimal : `contents: read` partout, `contents: write` seulement dans `release.yml`.
+- `dependabot.yml`: weekly `cargo` and `github-actions` updates.
+- Pinned actions (major tag at least, SHA ideally).
+- Minimal `GITHUB_TOKEN`: `contents: read` everywhere, `contents: write` only in `release.yml`.
 
 ## Documentation
 
-### README.md (en anglais, pour un public non technique)
+### README.md (in English, for a non-technical audience)
 
-1. **Présentation** : une phrase, capture d'écran, badges CI et licence.
-2. **Fonctionnalités** : icône d'état, quota, navigateur unifié, dossier de montage par cloud, limite de cache, pause, exclusions, mode headless, hors ligne.
-3. **Fournisseurs** : tableau fournisseur / statut (disponible, preview, prévu) / capacités (quota, lien de partage, corbeille).
-4. **Installation sur le bureau** : bundle Flatpak de la release (`flatpak install --user nuage.flatpak`), pré-requis `fuse3`.
-5. **Installation sur un serveur (headless)** : `.deb` ou tarball, service systemd, `enable-linger`, connexion d'un compte par tunnel SSH ou par token, exemple complet de bout en bout.
-6. **Compiler depuis les sources** : `flatpak-builder`, et développement hors Flatpak (`cargo run`, paquets apt).
-7. **Premier lancement** : ajout d'un compte, choix du dossier, limite de cache.
-8. **Créer son client OAuth Google** (obligatoire pour Google Drive) pas à pas, avec captures : projet GCP, API Drive, écran de consentement en *Production*, identifiants « Desktop app ».
-9. **Permissions Flatpak** : chaque `finish-arg` et sa raison, en particulier `org.freedesktop.Flatpak` (montage FUSE) et `home`.
-10. **Offline mode** : épinglage, ce qui marche sans réseau, conflits, espace utilisé.
-11. **Dépannage** : icône absente (extension AppIndicator), montage qui échoue (`fuse3`, montage orphelin), dossier hors du home (`flatpak override`), token expiré, démon injoignable.
-12. **Architecture** : schéma court, liens vers `docs/ARCHITECTURE.md`, `docs/CLI.md` et `docs/ADDING_A_PROVIDER.md`.
-13. **Contributing** et **License** (MIT ; rclone est embarqué sous sa propre licence MIT).
+1. **Overview**: one sentence, screenshot, CI and license badges.
+2. **Features**: status icon, quota, unified browser, mount folder per cloud, cache limit, pause, exclusions, headless mode, offline.
+3. **Providers**: table of provider / status (available, preview, planned) / capabilities (quota, share link, trash).
+4. **Installing on the desktop**: Flatpak bundle from the release (`flatpak install --user nuage.flatpak`), `fuse3` prerequisite.
+5. **Installing on a server (headless)**: `.deb` or tarball, systemd service, `enable-linger`, connecting an account by SSH tunnel or by token, full end-to-end example.
+6. **Building from source**: `flatpak-builder`, and development outside Flatpak (`cargo run`, apt packages).
+7. **First launch**: adding an account, choosing the folder, cache limit.
+8. **Creating your own Google OAuth client** (required for Google Drive) step by step, with screenshots: GCP project, Drive API, consent screen in *Production*, "Desktop app" credentials.
+9. **Flatpak permissions**: each `finish-arg` and its reason, in particular `org.freedesktop.Flatpak` (FUSE mount) and `home`.
+10. **Offline mode**: pinning, what works without network, conflicts, space used.
+11. **Troubleshooting**: missing icon (AppIndicator extension), mount that fails (`fuse3`, orphan mount), folder outside the home (`flatpak override`), expired token, unreachable daemon.
+12. **Architecture**: short diagram, links to `docs/ARCHITECTURE.md`, `docs/CLI.md` and `docs/ADDING_A_PROVIDER.md`.
+13. **Contributing** and **License** (MIT; rclone is bundled under its own MIT license).
 
-### Autres documents
+### Other documents
 
-- `docs/ARCHITECTURE.md` : processus, crates, règles de dépendance, protocole IPC, cycle de vie du démon et de rclone.
-- `docs/CLI.md` : toutes les commandes, options, format JSON de chaque sortie, codes de retour.
-- `docs/ADDING_A_PROVIDER.md` : module dans `providers`, feature Cargo, enregistrement, icône, tests, ligne dans le tableau du README.
-- `CHANGELOG.md` : utilisé par `release.yml`.
+- `docs/ARCHITECTURE.md`: processes, crates, dependency rules, IPC protocol, lifecycle of the daemon and of rclone.
+- `docs/CLI.md`: all commands, options, JSON format of each output, exit codes.
+- `docs/ADDING_A_PROVIDER.md`: module in `providers`, Cargo feature, registration, icon, tests, row in the README table.
+- `CHANGELOG.md`: used by `release.yml`.
 
-## Jalons
+## Milestones
 
-| # | Jalon | Livrable |
+| # | Milestone | Deliverable |
 |---|---|---|
-| 1 | **Preuve du point dur** | Flatpak minimal (rclone + wrapper) qui monte un remote Drive configuré à la main dans un dossier du home, visible dans Nautilus. Vérifier aussi les points de [À vérifier](#à-vérifier) marqués « jalon 1 ». **Si ça échoue, on s'arrête et on réévalue.** **Validé le 2026-10-31** : Google Drive monté depuis le Flatpak avec un client OAuth perso, via le relais côté hôte (voir [point dur](#le-point-dur--fuse-dans-le-sandbox-flatpak)) ; navigation, lecture et raccourcis `link.html` vérifiés. |
-| 2 | **Squelette** | Workspace Cargo complet (dont `ipc`, `daemon`, `cli`), crates avec leurs interfaces, fournisseur `local`, `ci.yml` vert, README initial, `LICENSE`. |
-| 3 | **Démon et CLI** | `RcdSupervisor`, client rc typé, `MountManager`, `UploadControl`, `StatusPoller`, protocole IPC, CLI (`status`, `account`, `mount`, `pause`, `config`), tests de bout en bout avec `local`. |
-| 4 | **`nuage-fs` : relais** | Système de fichiers superposé en simple relais vers le montage rclone caché, sans régression ; `MountManager` monte les deux couches ; `nuage-fuse-relay` remplace le relais Python du prototype ; suite de tests FS. |
-| 5 | **Google Drive** | Fournisseur `gdrive` (client perso obligatoire, raccourcis web `link.html`), `nuage account add gdrive` avec les deux méthodes OAuth headless, config chiffrée ou `0600`. |
-| 6 | **Paquets natifs** | Unit systemd, tarball, `.deb`, job CI `native`. **Nuage est utilisable en headless à partir d'ici.** |
-| 7 | **Exclusions** | Filtres rclone sur le montage caché + interception locale dans `nuage-fs` (dossier `local-only`), remontage du seul montage caché, CLI `nuage exclude`. |
-| 8 | **Application GTK et tray** | `nuage-gtk` : mise en route guidée (écran client Google compris), fenêtre principale, icône d'état agrégé et menu, démarrage auto (portail Background). |
-| 9 | **Navigateur** | Navigateur graphique (navigation, actions, badges, glisser-déposer) et opérations fichiers en CLI. |
-| 10 | **Réglages et intégration** | Réglages, comportement de « Quit », notifications, dossier de montage par compte, exclusions dans la GUI. |
-| 11 | **Finitions → v1** | Job CI `flatpak`, `release.yml`, AppStream, icône, README et `docs/CLI.md` complets. |
-| 12 | **v1.1 — Hors ligne** | Épinglage dans `nuage-fs` : métadonnées SQLite, magasin d'épingles, renvoi, conflits, démarrage hors ligne, GUI + CLI. |
-| 13 | **v2** | OneDrive, Drive partagés ; Flathub reporté (voir ci-dessous). |
-| 14 | **Fournisseurs** | Dropbox, pCloud, Nextcloud, WebDAV, S3 (bucket comme racine du compte) ; Proton Drive en preview ; vérification de la connexion des comptes à identifiants. Nextcloud, WebDAV et S3 vérifiés contre Nextcloud 31, hacdias/webdav et MinIO en conteneurs ; Dropbox, pCloud et Proton restent à essayer avec de vrais comptes. Fait le 2026-11-05. |
+| 1 | **Proof of the hard part** | Minimal Flatpak (rclone + wrapper) that mounts a hand-configured Drive remote in a folder of the home, visible in Nautilus. Also check the points of [To verify](#to-verify) marked "milestone 1". **If it fails, we stop and reassess.** **Validated on 2026-10-31**: Google Drive mounted from the Flatpak with a personal OAuth client, via the host-side relay (see [hard part](#the-hard-part-fuse-in-the-flatpak-sandbox)); browsing, reading and `link.html` shortcuts checked. |
+| 2 | **Skeleton** | Complete Cargo workspace (including `ipc`, `daemon`, `cli`), crates with their interfaces, `local` provider, green `ci.yml`, initial README, `LICENSE`. |
+| 3 | **Daemon and CLI** | `RcdSupervisor`, typed rc client, `MountManager`, `UploadControl`, `StatusPoller`, IPC protocol, CLI (`status`, `account`, `mount`, `pause`, `config`), end-to-end tests with `local`. |
+| 4 | **`nuage-fs`: relay** | Overlay file system as a simple relay to the hidden rclone mount, without regression; `MountManager` mounts both layers; `nuage-fuse-relay` replaces the prototype's Python relay; FS test suite. |
+| 5 | **Google Drive** | `gdrive` provider (own client required, `link.html` web shortcuts), `nuage account add gdrive` with both headless OAuth methods, encrypted or `0600` config. |
+| 6 | **Native packages** | systemd unit, tarball, `.deb`, `native` CI job. **Nuage is usable headless from here on.** |
+| 7 | **Exclusions** | rclone filters on the hidden mount + local interception in `nuage-fs` (`local-only` folder), remounting only the hidden mount, `nuage exclude` CLI. |
+| 8 | **GTK app and tray** | `nuage-gtk`: guided setup (Google client screen included), main window, aggregated status icon and menu, autostart (Background portal). |
+| 9 | **Browser** | Graphical browser (browsing, actions, badges, drag and drop) and file operations from the CLI. |
+| 10 | **Settings and integration** | Settings, "Quit" behavior, notifications, mount folder per account, exclusions in the GUI. |
+| 11 | **Finishing touches → v1** | `flatpak` CI job, `release.yml`, AppStream, icon, complete README and `docs/CLI.md`. |
+| 12 | **v1.1 — Offline** | Pinning in `nuage-fs`: SQLite metadata, pin store, uploading back, conflicts, offline startup, GUI + CLI. |
+| 13 | **v2** | OneDrive, shared drives; Flathub postponed (see below). |
+| 14 | **Providers** | Dropbox, pCloud, Nextcloud, WebDAV, S3 (bucket as the account root); Proton Drive in preview; sign-in check for credential-based accounts. Nextcloud, WebDAV and S3 checked against Nextcloud 31, hacdias/webdav and MinIO in containers; Dropbox, pCloud and Proton remain to be tried with real accounts. Done on 2026-11-05. |
 
-**Décidé après le jalon 13 (2026-11-01).** Pas de publication pour l'instant : l'utilisateur se sert de Nuage au quotidien, on le polit, puis il décide. Flathub est préparé (`docs/FLATHUB.md`) mais reporté (permission `org.freedesktop.Flatpak` à justifier, pas de Flathub par défaut sur Ubuntu) ; un dépôt Flatpak sur GitHub Pages est l'intermédiaire envisagé si les mises à jour automatiques comptent.
+**Decided after milestone 13 (2026-11-01).** No publication for now: the user uses Nuage daily, we polish it, then the maintainer decides. Flathub is prepared (`docs/FLATHUB.md`) but postponed (`org.freedesktop.Flatpak` permission to justify, no Flathub by default on Ubuntu); a Flatpak repository on GitHub Pages is the intermediate step considered if automatic updates matter.
 
-**Option à décider plus tard : AppImage.** Hors sandbox, elle monte directement avec le `fusermount3` de l'hôte (ni wrapper ni relais). Points durs : runtime type 2 statique pour ne pas dépendre de `libfuse2` (absent d'Ubuntu par défaut) ; le démon doit survivre à l'application, donc `nuaged`, `nuage` et rclone sont copiés dans `~/.local/share/nuage/bin/` au premier lancement (et remis à jour) ; GTK 4 et libadwaita embarqués (livrable de 80 à 120 Mo) ; mises à jour via les informations zsync des releases GitHub. Jalon dédié éventuel : build en CI, test de démarrage sur Ubuntu 24.04 et Fedora, fichier joint aux releases.
+**Option to decide later: AppImage.** Outside the sandbox, it mounts directly with the host's `fusermount3` (neither wrapper nor relay). Hard parts: static type 2 runtime so as not to depend on `libfuse2` (absent from Ubuntu by default); the daemon must outlive the app, so `nuaged`, `nuage` and rclone are copied into `~/.local/share/nuage/bin/` on first launch (and kept up to date); GTK 4 and libadwaita bundled (80 to 120 MB deliverable); updates via the zsync information of the GitHub releases. Possible dedicated milestone: build in CI, startup test on Ubuntu 24.04 and Fedora, file attached to the releases.
 
-## Critères d'acceptation
+## Acceptance criteria
 
 ### v1
 
-**CI et release**
+**CI and release**
 
-- Sur une PR, la CI est verte : fmt, clippy, tests (dont intégration avec un vrai rclone et le fournisseur `local`), tests de bout en bout de la CLI, cargo-deny, règles de dépendance, builds Flatpak et natif avec artefacts.
-- Un tag `v0.1.0` produit une GitHub Release avec le bundle `.flatpak`, le tarball, le `.deb` et leurs sommes sha256.
+- On a PR, the CI is green: fmt, clippy, tests (including integration with a real rclone and the `local` provider), CLI end-to-end tests, cargo-deny, dependency rules, Flatpak and native builds with artifacts.
+- A `v0.1.0` tag produces a GitHub Release with the `.flatpak` bundle, the tarball, the `.deb` and their sha256 sums.
 
-**Bureau : mise en route**
+**Desktop: setup**
 
-- Sur une Ubuntu fraîche avec flatpak : installation du bundle, puis ajout du compte Drive entièrement depuis l'interface, auth dans le navigateur, **en 4 écrans** (fournisseur, client Google guidé, authentification, dossier + démarrage auto). Un utilisateur qui suit l'écran guidé crée son client GCP sans consulter d'autre documentation. Un second compte Google ne demande que 3 écrans.
-- Aucune autre question n'est posée pendant la mise en route.
-- Après « Start sync », la fenêtre affiche la liste des comptes avec « Open Folder », l'icône est dans la barre système et le dossier est monté.
-- Avec le démarrage auto activé, l'icône apparaît au login suivant sans action manuelle.
+- On a fresh Ubuntu with flatpak: installing the bundle, then adding the Drive account entirely from the interface, auth in the browser, **in 4 screens** (provider, guided Google client, authentication, folder + autostart). A user who follows the guided screen creates their GCP client without consulting any other documentation. A second Google account only takes 3 screens.
+- No other question is asked during setup.
+- After "Start sync", the window shows the list of accounts with "Open Folder", the icon is in the system tray and the folder is mounted.
+- With autostart on, the icon appears at the next login without manual action.
 
 **Headless**
 
-- Sur un serveur Ubuntu fraîchement installé, sans environnement graphique, accessible en SSH : installation du `.deb` ou du tarball, connexion d'un compte Drive (par tunnel SSH ou par `--token-file`), montage et `nuage status` fonctionnels, **sans aucune invite interactive** lorsque toutes les options sont fournies.
-- Un agent (ex. Claude Code) réalise ce scénario de bout en bout en suivant uniquement le README.
-- Avec `enable-linger`, le dossier est remonté après un redémarrage du serveur sans connexion d'un utilisateur.
-- Chaque commande accepte `--json` et renvoie les codes de retour documentés.
+- On a freshly installed Ubuntu server, without a graphical environment, reachable over SSH: installing the `.deb` or the tarball, connecting a Drive account (by SSH tunnel or by `--token-file`), working mount and `nuage status`, **without any interactive prompt** when all options are provided.
+- An agent (e.g. Claude Code) carries out this scenario end to end by following only the README.
+- With `enable-linger`, the folder is remounted after a server restart without any user logging in.
+- Every command accepts `--json` and returns the documented exit codes.
 
-**Montage, sync et cache**
+**Mounting, sync and cache**
 
-- Le dossier choisi apparaît dans Nautilus et les fichiers s'ouvrent dans les applications de l'hôte. Changer de dossier démonte l'ancien et monte le nouveau.
-- Copier un gros fichier dans le dossier monté : l'icône passe à ↻ avec le nombre de fichiers, le fichier porte le badge « Uploading » dans le navigateur, puis tout revient à ✓ (`nuage status` suit les mêmes états).
-- En pause, un fichier copié dans le dossier n'est pas envoyé ; il part à la reprise. La pause survit au redémarrage du démon.
-- Un Google Doc apparaît dans le dossier monté comme un raccourci qui s'ouvre dans le navigateur web.
-- Le quota affiché correspond à celui de drive.google.com (à l'arrondi près).
-- Avec une limite de cache de 1 Go, le cache du compte ne dépasse pas durablement 1 Go après lecture de plusieurs Go.
+- The chosen folder appears in Nautilus and files open in the host's apps. Changing the folder unmounts the old one and mounts the new one.
+- Copying a large file into the mounted folder: the icon switches to ↻ with the number of files, the file carries the "Uploading" badge in the browser, then everything goes back to ✓ (`nuage status` follows the same states).
+- When paused, a file copied into the folder is not uploaded; it is sent on resume. The pause survives a daemon restart.
+- A Google Doc appears in the mounted folder as a shortcut that opens in the web browser.
+- The quota shown matches the one on drive.google.com (up to rounding).
+- With a 1 GB cache limit, the account's cache does not stay above 1 GB after reading several GB.
 
-**Navigateur et modularité**
+**Browser and modularity**
 
-- Le navigateur a le même design pour `gdrive` et `local` ; une action non supportée est masquée, pas en erreur.
-- Ajouter un fournisseur déclaratif (ex. OneDrive) ne modifie aucun fichier de `engine`, `ui`, `tray` ni `cli`. S3 a demandé une fois d'étendre l'abstraction (`Account.root`, `Provider::root`, vérification de connexion) ; les fournisseurs suivants en profitent sans toucher au moteur.
+- The browser has the same design for `gdrive` and `local`; an unsupported action is hidden, not an error.
+- Adding a declarative provider (e.g. OneDrive) modifies no file in `engine`, `ui`, `tray` or `cli`. S3 once required extending the abstraction (`Account.root`, `Provider::root`, sign-in check); the following providers benefit from it without touching the engine.
 
 **Exclusions**
 
-- Exclure un dossier depuis le navigateur ou la CLI : après remontage, il disparaît du dossier monté et n'est plus téléchargé ; il reste visible et grisé « Not synced » dans le navigateur et peut être réinclus.
-- Un fichier `*.tmp` n'est jamais envoyé.
+- Excluding a folder from the browser or the CLI: after remounting, it disappears from the mounted folder and is no longer downloaded; it stays visible and greyed out as "Not synced" in the browser and can be included again.
+- A `*.tmp` file is never uploaded.
 
-**Robustesse et sécurité**
+**Robustness and security**
 
-- Réseau coupé : état explicite, pas de crash ; retour à la normale ensuite.
-- « Quit » avec des uploads en attente (réglage par défaut) : l'interface disparaît, les uploads se terminent, puis le dossier est démonté.
-- Après un `kill -9` du démon, le lancement suivant nettoie le montage orphelin.
-- Supprimer un compte efface ses données locales (remote, cache, dossier vide) et ne touche à rien sur le cloud.
-- Aucun secret dans les logs. Sur le bureau, aucun secret en clair sur le disque ; en headless sans trousseau, `rclone.conf` est en `0600` et `nuage status` le signale.
+- Network cut off: explicit status, no crash; back to normal afterwards.
+- "Quit" with pending uploads (default setting): the interface disappears, the uploads finish, then the folder is unmounted.
+- After a `kill -9` of the daemon, the next launch cleans up the orphan mount.
+- Removing an account erases its local data (remote, cache, empty folder) and touches nothing in the cloud.
+- No secret in the logs. On the desktop, no secret in clear text on disk; headless without a keyring, `rclone.conf` is `0600` and `nuage status` reports it.
 
-### v1.1 (hors ligne)
+### v1.1 (offline)
 
-- Un fichier épinglé s'ouvre **à son chemin habituel** dans le dossier monté, réseau coupé.
-- Après un **redémarrage sans réseau**, le dossier monté apparaît, l'arborescence est navigable et les fichiers épinglés s'ouvrent.
-- Un fichier épinglé modifié hors ligne est renvoyé automatiquement au retour du réseau.
-- Une modification locale et distante simultanée produit deux fichiers (aucune perte) et une notification.
-- Un nouveau fichier ajouté à distance dans un dossier épinglé est téléchargé automatiquement.
-- Remplir le cache VFS au-delà de sa limite n'évince jamais un fichier épinglé.
-- Désépingler un fichier dont les modifications n'ont pas été renvoyées est refusé (ou demande confirmation) tant qu'elles ne sont pas envoyées.
-- Hors ligne, les éléments non épinglés sont visibles, grisés, et renvoient une erreur propre à l'ouverture, sans bloquer Nautilus.
-- Tout cela est aussi pilotable en CLI (`nuage pin …`).
-- La CI couvre ces cas avec le fournisseur `local`, en simulant la coupure réseau (arrêt du montage rclone sous-jacent).
+- A pinned file opens **at its usual path** in the mounted folder, with the network cut off.
+- After a **restart without network**, the mounted folder appears, the tree is browsable and pinned files open.
+- A pinned file modified offline is uploaded automatically when the network is back.
+- A simultaneous local and remote change produces two files (no loss) and a notification.
+- A new file added remotely in a pinned folder is downloaded automatically.
+- Filling the VFS cache beyond its limit never evicts a pinned file.
+- Unpinning a file whose changes have not been uploaded is refused (or asks for confirmation) as long as they are not sent.
+- Offline, unpinned items are visible, greyed out, and return a clean error when opened, without blocking Nautilus.
+- All of this can also be driven from the CLI (`nuage pin …`).
+- The CI covers these cases with the `local` provider, by simulating the network cut (stopping the underlying rclone mount).
 
-## À vérifier
+## To verify
 
-| Point | Quand |
+| Point | When |
 |---|---|
-| Le portail FileChooser renvoie bien le vrai chemin (pas `/run/user/*/doc/`) pour un dossier sous le home avec `--filesystem=home` | jalon 1 |
-| Noms exacts des champs et options rc (`vfs/stats`, `vfsOpt`, etc.) sur la version embarquée | jalon 3, puis à chaque montée de version (test d'intégration) |
-| Le flux « URL + tunnel SSH » avec `config_auth_no_browser` fonctionne de bout en bout avec un vrai compte Google | jalon 5 |
-| Build statique (musl) des binaires natifs avec rclone et FUSE | jalon 6 |
-| Ouverture des raccourcis `link.html` : l'application HTML par défaut peut ne pas être un navigateur (Thunderbird sur le poste de test). Faut-il que Nuage ouvre lui-même l'URL dans le navigateur par défaut ? | jalon 5 |
-| `nuage-fuse-relay` exécuté sur l'hôte depuis le chemin de l'application (`/.flatpak-info`), installation `--user` et système | jalon 4 |
-| Le relais reste nécessaire ou non sur d'autres distributions (Fedora, Debian, Arch) ; le garder dans tous les cas s'il est sans effet de bord | jalon 4 |
-| Performance de `nuage-fs` en relais (débit, latence des listings) face à un montage rclone direct | jalon 4 |
-| rclone n'a pas ajouté d'épinglage natif entre-temps (sinon, réévaluer l'épinglage dans `nuage-fs`) | avant le jalon 12 |
+| The FileChooser portal does return the real path (not `/run/user/*/doc/`) for a folder under the home with `--filesystem=home` | milestone 1 |
+| Exact names of rc fields and options (`vfs/stats`, `vfsOpt`, etc.) on the bundled version | milestone 3, then at every version upgrade (integration test) |
+| The "URL + SSH tunnel" flow with `config_auth_no_browser` works end to end with a real Google account | milestone 5 |
+| Static build (musl) of the native binaries with rclone and FUSE | milestone 6 |
+| Opening `link.html` shortcuts: the default HTML application may not be a browser (Thunderbird on the test machine). Should Nuage open the URL in the default browser itself? | milestone 5 |
+| `nuage-fuse-relay` run on the host from the app's path (`/.flatpak-info`), `--user` and system installation | milestone 4 |
+| Whether the relay is still needed on other distributions (Fedora, Debian, Arch); keep it in all cases if it has no side effects | milestone 4 |
+| Performance of `nuage-fs` as a relay (throughput, listing latency) compared with a direct rclone mount | milestone 4 |
+| rclone has not added native pinning in the meantime (otherwise, reassess pinning in `nuage-fs`) | before milestone 12 |
 
-## Questions ouvertes
+## Open questions
 
-- **aarch64** (Raspberry Pi, serveurs ARM) : non demandé pour la v1 ; à ajouter aux paquets natifs si le coût est faible.
+- **aarch64** (Raspberry Pi, ARM servers): not requested for v1; to add to the native packages if the cost is low.

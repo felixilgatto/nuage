@@ -37,7 +37,7 @@ Read, do not guess:
   meaning of each field, and any field added since the last update.
 - The `Provider` trait in `crates/providers/src/lib.rs`: its methods, for
   the developer guide.
-- `docs/brief.md`, sections "Périmètre par version" and "Jalons": which providers are
+- `docs/brief.md`, sections "Scope by version" and "Milestones": which providers are
   planned, and for which version. Only these may be listed as *planned*.
 
 Write the inventory down (one line per provider) before editing anything.
