@@ -22,7 +22,9 @@ flatpak install --user https://felixilgatto.github.io/nuage/nuage.flatpakref
 ```
 
 Nuage then updates with `flatpak update` and in Software, like any other
-app. The GNOME runtime it needs comes from Flathub, added on the way if
+app. It also says when a new version is available: click **Update**, then
+**Restart** once it is installed. The first time, your desktop asks whether
+Nuage may update itself. The GNOME runtime it needs comes from Flathub, added on the way if
 needed. Each [release](https://github.com/felixilgatto/nuage/releases) also
 has `.flatpak` bundles, which update the same way.
 
