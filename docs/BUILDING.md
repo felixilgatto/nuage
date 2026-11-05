@@ -148,8 +148,7 @@ publishes it. To publish a change to it without a release: Actions →
 run only builds the site). It reuses the latest release's repository
 unchanged (`nuage-site.tar`, attached to the release), so installed copies
 see no update. To look at it locally:
-`scripts/site-page.sh "$PWD/target/site" target/site` then open
-`target/site/index.html`.
+`scripts/site-page.sh`, then open `target/site/index.html`.
 
 `scripts/check-release.sh` (run by CI) checks that `Cargo.toml`, the
 metainfo and the changelog agree; the release also checks the tag.
