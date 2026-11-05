@@ -32,7 +32,8 @@ fn random_id() -> Result<String> {
 fn connection_error(
     provider: &str,
     root: &str,
-    labels: &[String],
+    filled: &[String],
+    empty: &[String],
     e: &nuage_rclone::RcError,
 ) -> Error {
     let message = match e {
@@ -55,12 +56,17 @@ fn connection_error(
     .iter()
     .any(|s| m.contains(s));
     if refused {
-        let what = match labels {
+        let what = match filled {
             [] => "what you entered".to_owned(),
-            [one] => format!("the {one}"),
-            [rest @ .., last] => format!("the {} and {last}", rest.join(", ")),
+            labels => format!("the {}", list(labels)),
         };
-        return Error::InvalidArgument(format!("{provider} refused the connection: check {what}."));
+        let or = match empty {
+            [] => String::new(),
+            labels => format!(", or fill in the {}", list(labels)),
+        };
+        return Error::InvalidArgument(format!(
+            "{provider} refused the connection: check {what}{or}."
+        ));
     }
     if crate::files::is_not_found(e) {
         return Error::InvalidArgument(if root.is_empty() {
@@ -81,6 +87,15 @@ fn connection_error(
         ));
     }
     Error::Rclone(format!("Cannot connect to {provider}: {message}"))
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// A form label as it reads in a sentence: "User Name (If Any)" → "user
@@ -387,22 +402,23 @@ impl Inner {
                 .await
         {
             let _ = rc.config_delete(&remote_name).await;
-            // The fields the user filled in: one of them is wrong.
-            let labels: Vec<String> = fields
-                .iter()
-                .filter(|f| {
-                    !f.folder
-                        && input
-                            .credentials
-                            .get(&f.key)
-                            .is_some_and(|v| !v.trim().is_empty())
-                })
-                .map(|f| label_in_sentence(&f.label))
-                .collect();
+            // One of the fields filled in is wrong, or an optional one left
+            // empty is needed (e.g. the bucket of a key limited to it).
+            let (filled, empty): (Vec<_>, Vec<_>) =
+                fields.iter().filter(|f| !f.folder).partition(|f| {
+                    input
+                        .credentials
+                        .get(&f.key)
+                        .is_some_and(|v| !v.trim().is_empty())
+                });
+            let labels = |fields: Vec<&nuage_core::CredentialField>| -> Vec<String> {
+                fields.iter().map(|f| label_in_sentence(&f.label)).collect()
+            };
             return Err(connection_error(
                 provider.display_name(),
                 &root,
-                &labels,
+                &labels(filled),
+                &labels(empty),
                 &e,
             ));
         }
@@ -930,15 +946,27 @@ mod connection_tests {
             "Nextcloud",
             "",
             &labels,
+            &[],
             &api("couldn't list files: 401 Unauthorized"),
         );
         assert_eq!(
             e.to_string(),
             "Nextcloud refused the connection: check the user name and app password."
         );
-        let e = connection_error("S3", "photos", &[], &api("directory not found"));
+        let e = connection_error(
+            "S3",
+            "",
+            &["access key ID".to_owned()],
+            &["region".to_owned(), "bucket".to_owned()],
+            &api("ListBuckets, https response error StatusCode: 403"),
+        );
+        assert_eq!(
+            e.to_string(),
+            "S3 refused the connection: check the access key ID, or fill in the region and bucket."
+        );
+        let e = connection_error("S3", "photos", &[], &[], &api("directory not found"));
         assert!(e.to_string().contains("\"photos\" does not exist"), "{e}");
-        let e = connection_error("WebDAV", "", &[], &api("dial tcp: connection refused"));
+        let e = connection_error("WebDAV", "", &[], &[], &api("dial tcp: connection refused"));
         assert!(
             e.to_string().starts_with("rclone: Cannot reach WebDAV"),
             "{e}"
