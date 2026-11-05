@@ -4,6 +4,17 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-05
+
+- Install on the desktop from Nuage's own Flatpak repository
+  (`flatpak install --user https://felixilgatto.github.io/nuage/nuage.flatpakref`):
+  Nuage then updates with `flatpak update` and in Software. The `.flatpak`
+  bundles of the releases update from it too.
+- Packages for ARM64 (Raspberry Pi, ARM servers) besides x86-64, and an
+  `.rpm` for Fedora and openSUSE besides the `.deb` and the tarball.
+- Each download comes with a checksum and a build provenance:
+  `gh attestation verify <file> --repo felixilgatto/nuage` proves it was
+  built by the release workflow.
 - New providers: Nextcloud and WebDAV (server address and password), and S3
   bucket storage (Amazon S3, Cloudflare R2, Backblaze B2, MinIO…, with an
   access key; one bucket, or all of them).

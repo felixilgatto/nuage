@@ -105,7 +105,7 @@ flatpak run org.flatpak.Builder --force-clean --repo=target/flatpak-repo \
 flatpak build-bundle target/flatpak-repo nuage.flatpak io.github.felixilgatto.Nuage
 ```
 
-CI builds the bundle (artifact `nuage.flatpak`) and runs
+CI builds the bundle (artifact `nuage-x86_64.flatpak`) and runs
 `scripts/flatpak-lint.sh` (`flatpak-builder-lint` on the manifest, the
 metainfo and the repository). It accepts only these findings for now:
 access to `flatpak-spawn` (the `fusermount3` wrapper, see
@@ -121,10 +121,47 @@ LINT="flatpak run --command=flatpak-builder-lint org.flatpak.Builder" \
 
 ## Releases
 
-Push a tag `v<version>` (after a `## [<version>]` section in
-`CHANGELOG.md`): `release.yml` builds the Flatpak bundle, the tarball and
-the `.deb`, and publishes them in a GitHub release with their checksums
-and the changelog section.
+A release publishes, for x86_64 and aarch64: the `.deb`, the `.rpm` and the
+tarball (static binaries), the `.flatpak` bundles, their checksums and
+their build provenance in a GitHub release; and the signed Flatpak
+repository on GitHub Pages (<https://felixilgatto.github.io/nuage/>), from
+which installed copies update.
+
+1. `scripts/prepare-release.sh <version>`: sets the version in
+   `Cargo.toml`, turns the changelog's `[Unreleased]` section into
+   `[<version>] - <today>`, and adds the `<release>` of the metainfo. Review
+   the diff and commit it. (Run it again on the day of the release to
+   update the date.)
+2. Test everything without publishing: Actions → **Release** → **Run
+   workflow** on the branch. It builds every package on both
+   architectures, installs them in clean Ubuntu, Debian and Fedora
+   containers, builds the Flatpak repository signed with a throw-away key,
+   and installs, updates and updates a bundle from it as a new user. The
+   files are in the run's artifacts.
+3. Push the tag: `git tag v<version> && git push origin v<version>`. The
+   same workflow then publishes.
+
+`scripts/check-release.sh` (run by CI) checks that `Cargo.toml`, the
+metainfo and the changelog agree; the release also checks the tag.
+
+**Once, before the first release:**
+
+- The Flatpak repository's signing key: a GPG key without passphrase, kept
+  only as the `FLATPAK_SIGNING_KEY` secret of the repository (and a backup
+  in a safe place). Changing it later breaks updates for everyone who
+  installed Nuage, so do not lose it.
+
+  ```sh
+  export GNUPGHOME=$(mktemp -d)
+  gpg --batch --passphrase '' --quick-gen-key "Nuage Flatpak repository" rsa4096 sign never
+  gpg --armor --export-secret-keys | gh secret set FLATPAK_SIGNING_KEY
+  gpg --armor --export-secret-keys > nuage-flatpak-signing-key.asc   # the backup
+  rm -rf "$GNUPGHOME"
+  ```
+
+- GitHub Pages published by GitHub Actions:
+  `gh api -X POST repos/felixilgatto/nuage/pages -f build_type=workflow`
+  (or Settings → Pages → Source: GitHub Actions).
 
 ## Contributing
 

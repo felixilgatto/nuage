@@ -56,14 +56,17 @@ jobs:
       - name: Dependency rules between crates
         run: scripts/check-deps.sh
 
+      - name: Same version in Cargo.toml, the metainfo and the changelog
+        run: scripts/check-release.sh
+
       - name: Licenses, advisories, duplicates
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
 
   native:
-    # Headless packages: static binaries (no GTK), tarball and .deb, tested in
-    # clean containers.
+    # Headless packages: static binaries (no GTK), tarball, .deb and .rpm,
+    # tested in clean containers. The release also builds them for aarch64.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -78,12 +81,12 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deb
+          tool: cargo-deb,cargo-generate-rpm
 
       - name: Install FUSE
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fuse3 jq musl-tools
 
-      - name: Build the tarball and the .deb
+      - name: Build the tarball, the .deb and the .rpm
         run: scripts/build-native.sh
 
       - name: End-to-end tests against the static nuaged
@@ -93,9 +96,9 @@ jobs:
           NUAGE_RCLONE: ${{ github.workspace }}/target/rclone/rclone
           NUAGE_E2E_REQUIRED: "1"
 
-      - name: Install the .deb in clean containers
+      - name: Install the packages in clean containers
         run: |
-          for image in ubuntu:24.04 debian:12; do
+          for image in ubuntu:24.04 debian:12 fedora:43; do
             echo "::group::$image"
             docker run --rm --device /dev/fuse --cap-add SYS_ADMIN \
               --security-opt apparmor:unconfined \

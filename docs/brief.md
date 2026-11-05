@@ -714,7 +714,7 @@ Workflows in `.github/workflows/`, on the `felixilgatto/nuage` repository. **No 
 1. **Overview**: one sentence, screenshot, CI and license badges.
 2. **Features**: status icon, quota, unified browser, mount folder per cloud, cache limit, pause, exclusions, headless mode, offline.
 3. **Providers**: table of provider / status (available, preview, planned) / capabilities (quota, share link, trash).
-4. **Installing on the desktop**: Flatpak bundle from the release (`flatpak install --user nuage.flatpak`), `fuse3` prerequisite.
+4. **Installing on the desktop**: from the Flatpak repository on GitHub Pages (`flatpak install --user https://felixilgatto.github.io/nuage/nuage.flatpakref`, updates with `flatpak update`) or a bundle from the release, `fuse3` prerequisite.
 5. **Installing on a server (headless)**: `.deb` or tarball, systemd service, `enable-linger`, connecting an account by SSH tunnel or by token, full end-to-end example.
 6. **Building from source**: `flatpak-builder`, and development outside Flatpak (`cargo run`, apt packages).
 7. **First launch**: adding an account, choosing the folder, cache limit.
@@ -750,6 +750,8 @@ Workflows in `.github/workflows/`, on the `felixilgatto/nuage` repository. **No 
 | 12 | **v1.1 — Offline** | Pinning in `nuage-fs`: SQLite metadata, pin store, uploading back, conflicts, offline startup, GUI + CLI. |
 | 13 | **v2** | OneDrive, shared drives; Flathub postponed (see below). |
 | 14 | **Providers** | Dropbox, pCloud, Nextcloud, WebDAV, S3 (bucket as the account root); Proton Drive in preview; sign-in check for credential-based accounts. Nextcloud, WebDAV and S3 checked against Nextcloud 31, hacdias/webdav and MinIO in containers; Dropbox, pCloud and Proton remain to be tried with real accounts. Done on 2026-11-05. |
+
+**Milestone 15 — Distribution (2026-11-05).** The release workflow builds for x86_64 and aarch64: `.deb`, `.rpm` (Fedora, openSUSE) and tarball of static binaries, smoke-tested in clean Ubuntu, Debian and Fedora containers; Flatpak bundles; and a Flatpak repository signed with the project's GPG key, published on GitHub Pages with a `.flatpakref`, from which installs and bundles update (`flatpak update`). Downloads carry checksums and GitHub build provenance (`gh attestation verify`). `scripts/prepare-release.sh` prepares a version, `scripts/check-release.sh` checks that the tag, `Cargo.toml`, the metainfo and the changelog agree. A manual run of the workflow tests all of it without publishing. Publishing (the tag) is still the maintainer's decision.
 
 **Decided after milestone 13 (2026-11-01).** No publication for now: the user uses Nuage daily, we polish it, then the maintainer decides. Flathub is prepared (`docs/FLATHUB.md`) but postponed (`org.freedesktop.Flatpak` permission to justify, no Flathub by default on Ubuntu); a Flatpak repository on GitHub Pages is the intermediate step considered if automatic updates matter.
 
@@ -834,4 +836,4 @@ Workflows in `.github/workflows/`, on the `felixilgatto/nuage` repository. **No 
 
 ## Open questions
 
-- **aarch64** (Raspberry Pi, ARM servers): not requested for v1; to add to the native packages if the cost is low.
+- **aarch64** (Raspberry Pi, ARM servers): done on 2026-11-05 (milestone 15), native packages and Flatpak, built on GitHub's ARM runners.

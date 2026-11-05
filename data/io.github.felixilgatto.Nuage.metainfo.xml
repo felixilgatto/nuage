@@ -89,6 +89,30 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-05">
+      <description>
+        <ul>
+          <li>Install on the desktop from Nuage's own Flatpak repository (flatpak install --user https://felixilgatto.github.io/nuage/nuage.flatpakref): Nuage then updates with flatpak update and in Software. The .flatpak bundles of the releases update from it too.</li>
+          <li>Packages for ARM64 (Raspberry Pi, ARM servers) besides x86-64, and an .rpm for Fedora and openSUSE besides the .deb and the tarball.</li>
+          <li>Each download comes with a checksum and a build provenance: gh attestation verify &lt;file&gt; --repo felixilgatto/nuage proves it was built by the release workflow.</li>
+          <li>New providers: Nextcloud and WebDAV (server address and password), and S3 bucket storage (Amazon S3, Cloudflare R2, Backblaze B2, MinIO…, with an access key; one bucket, or all of them).</li>
+          <li>In preview, not yet tried with real accounts: Dropbox and pCloud (sign in in the browser), and Proton Drive as a build option.</li>
+          <li>Nuage checks the connection before adding an account set up with a form (Nextcloud, WebDAV, S3, Proton Drive): a wrong password or bucket is reported at once, with what to check, instead of giving a folder that shows nothing.</li>
+          <li>Folders mount after a restart even when the keyring is slow to answer at login (a session that logs in automatically, or a desktop portal still starting): Nuage waits for it instead of stopping. Meanwhile, the tray shows "Waiting for the keyring" with a key, not a problem; it becomes a problem after 3 minutes. The window starts the Nuage service again if it crashes.</li>
+          <li>Removing an account no longer fills the log with errors about its cache.</li>
+          <li>After an update installed while Nuage runs, folders still mount, and Nuage offers to restart into the new version.</li>
+          <li>Leaving the folder screen without starting the sync no longer leaves a half-added account; going back is locked while the folder is set up.</li>
+          <li>After adding an account, the window stays open on the accounts list, with "Open Folder"; "Start Sync" shows that it is working.</li>
+          <li>How to uninstall, in the README.</li>
+          <li>OneDrive (personal): sign in in the browser, no client to create. Nuage picks your own drive (the one named "OneDrive"), and the next one if Microsoft refuses it; on a server, --token-file works the same way. The Personal Vault, which cannot be opened, is documented.</li>
+          <li>Google shared drives, each as an account of its own, added from a Google account without signing in again.</li>
+          <li>Offline mode: keep files and folders on this computer ("Keep Offline" in the browser, nuage pin). They open and can be edited without a connection, also after a restart; changes upload when it comes back, and a file changed in two places keeps both versions.</li>
+          <li>A warning when the items kept offline take more than a chosen space (offline-warning).</li>
+          <li>Offline, the other items stay listed and fail to open at once, without blocking file managers.</li>
+          <li>After signing in, the browser shows a Nuage page and Nuage comes back to the front.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-01">
       <description>
         <p>First version: Google Drive and local folders, mounted with rclone.</p>

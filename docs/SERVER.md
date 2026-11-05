@@ -3,26 +3,44 @@
 Nuage runs on a server without a screen, entirely from the command line,
 with no interactive prompt. The packages contain static binaries and the
 rclone version Nuage is tested with (installed apart from any other
-rclone). Until the first release, download them from the `nuage-native`
-artifact of a [CI run](https://github.com/felixilgatto/nuage/actions), or
-build them with `scripts/build-native.sh`.
+rclone). Download them from the
+[releases](https://github.com/felixilgatto/nuage/releases); until the first
+one, take the `nuage-native` artifact of a
+[CI run](https://github.com/felixilgatto/nuage/actions), or build them with
+`scripts/build-native.sh`.
 
-Requirements: Linux x86-64 with systemd, and `fuse3`.
+Requirements: Linux on x86-64 or ARM64 (`aarch64`: Raspberry Pi 4 and
+later, ARM servers) with systemd, and `fuse3`.
 
 ## Install
+
+In the names below, `<arch>` is `amd64` or `arm64` for the `.deb`,
+`x86_64` or `aarch64` otherwise (`uname -m` says which).
 
 **With the `.deb`** (Debian, Ubuntu; installs `fuse3` too):
 
 ```sh
-sudo apt install ./nuage_<version>_amd64.deb
+sudo apt install ./nuage_<version>-1_<arch>.deb
+```
+
+**With the `.rpm`** (Fedora, openSUSE; installs `fuse3` too):
+
+```sh
+sudo dnf install ./nuage-<version>-1.<arch>.rpm      # openSUSE: sudo zypper install
 ```
 
 **Or with the tarball**, without root (installs into `~/.local`):
 
 ```sh
-tar xf nuage-<version>-x86_64-linux.tar.gz
-./nuage-<version>-x86_64-linux/install.sh
+tar xf nuage-<version>-<arch>-linux.tar.gz
+./nuage-<version>-<arch>-linux/install.sh
 ```
+
+**Check a download** (optional): `sha256sum -c SHA256SUMS --ignore-missing`
+compares it with the release's checksums; with the
+[GitHub CLI](https://cli.github.com/),
+`gh attestation verify <file> --repo felixilgatto/nuage` proves it was built
+by this repository's release workflow.
 
 Then start the daemon, and keep it running when you are logged out:
 

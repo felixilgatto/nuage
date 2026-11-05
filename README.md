@@ -7,8 +7,8 @@
 Files, work on your documents as usual: Nuage keeps them in sync.
 
 > **Early development.** Google Drive and OneDrive are the most tested.
-> Dropbox, pCloud and Proton Drive are in preview. The desktop app runs
-> from a source build for now: there is no Flatpak bundle yet.
+> Dropbox, pCloud and Proton Drive are in preview. The first release is
+> being prepared: until it is out, build from source.
 
 ## What it does
 
@@ -27,15 +27,23 @@ MinIO…); in preview, **Dropbox**, **pCloud** and **Proton Drive**
 
 ## Install
 
-**Desktop**: a Flatpak bundle will be attached to each release *(planned)*:
+**Desktop** (Flatpak, x86-64 and ARM64), from the first release on. You
+need Flatpak (on Ubuntu: `sudo apt install flatpak`), then open
+[nuage.flatpakref](https://felixilgatto.github.io/nuage/nuage.flatpakref)
+with Software, or run:
 
 ```sh
-flatpak install --user nuage.flatpak
+flatpak install --user https://felixilgatto.github.io/nuage/nuage.flatpakref
 ```
 
-Until then, see [building from source](docs/BUILDING.md).
+Nuage then updates with `flatpak update` and in Software, like any other
+app. The GNOME runtime it needs comes from Flathub, added on the way if
+needed. Each [release](https://github.com/felixilgatto/nuage/releases) also
+has `.flatpak` bundles, which update the same way. Until the first release,
+see [building from source](docs/BUILDING.md).
 
-**Server**: a `.deb` and a tarball, see [docs/SERVER.md](docs/SERVER.md).
+**Server**: `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) and a
+tarball, for x86-64 and ARM64; see [docs/SERVER.md](docs/SERVER.md).
 
 Requirement: `fuse3` (installed by default on Ubuntu).
 
@@ -47,10 +55,13 @@ Requirement: `fuse3` (installed by default on Ubuntu).
 
    ```sh
    flatpak uninstall --user --delete-data io.github.felixilgatto.Nuage
+   flatpak remote-delete --user nuage
    rm -f ~/.config/autostart/io.github.felixilgatto.Nuage.desktop
    ```
 
-   Flatpak does not remove the start-at-login entry: the second line does.
+   The second line removes Nuage's repository (named `nuage-origin` instead
+   if you installed a `.flatpak` bundle). Flatpak does not remove the start-at-login entry:
+   the third line does.
    Your cloud folders stay, empty; delete them if you want.
 3. Optionally, withdraw Nuage's access on the provider's side: Google
    <https://myaccount.google.com/connections>, Microsoft

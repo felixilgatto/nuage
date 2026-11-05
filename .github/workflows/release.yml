@@ -1,44 +1,98 @@
 name: Release
 
+# A pushed tag v<version> publishes the release: the GitHub release (native
+# packages and Flatpak bundles for x86_64 and aarch64, checksums, build
+# provenance) and the Flatpak repository on GitHub Pages.
+#
+# Run by hand (Actions → Release → Run workflow), it builds and tests the
+# same deliverables, signs the Flatpak repository with a throw-away key and
+# publishes nothing: everything is in the run's artifacts.
+
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  NUAGE_RCLONE_VERSION: v1.75.2
+  PAGES_URL: https://felixilgatto.github.io/nuage
 
 jobs:
-  native:
+  version:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Same version in the tag, Cargo.toml, the metainfo and the changelog
+        id: check
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=$(scripts/check-release.sh "${GITHUB_REF_NAME#v}")
+          else
+            version=$(scripts/check-release.sh)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  native:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.arch }}-unknown-linux-musl
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deb
-      - name: Install FUSE
+          tool: cargo-deb,cargo-generate-rpm
+      - name: Install FUSE and musl
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fuse3 jq musl-tools
-      - name: Build the tarball and the .deb
+      - name: Build the tarball, the .deb and the .rpm
         run: scripts/build-native.sh
-      - name: Smoke test in a clean container
+      - name: Install the packages in clean containers
         run: |
-          docker run --rm --device /dev/fuse --cap-add SYS_ADMIN \
-            --security-opt apparmor:unconfined \
-            -v "$PWD/target/dist:/dist:ro" -v "$PWD/scripts:/scripts:ro" \
-            ubuntu:24.04 /scripts/smoke-native.sh
+          for image in ubuntu:24.04 debian:12 fedora:43; do
+            echo "::group::$image"
+            docker run --rm --device /dev/fuse --cap-add SYS_ADMIN \
+              --security-opt apparmor:unconfined \
+              -v "$PWD/target/dist:/dist:ro" -v "$PWD/scripts:/scripts:ro" \
+              "$image" /scripts/smoke-native.sh
+            echo "::endgroup::"
+          done
+      - name: The tarball installs without root
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf target/dist/nuage-*-linux.tar.gz
+          HOME="$RUNNER_TEMP/home" sh "$RUNNER_TEMP"/nuage-*-linux/install.sh
+          "$RUNNER_TEMP/home/.local/bin/nuage" --version
+          "$RUNNER_TEMP/home/.local/lib/nuage/rclone" version | head -1
+      - run: rm -f target/dist/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: native
+          name: native-${{ matrix.arch }}
           path: target/dist/
 
   flatpak:
-    runs-on: ubuntu-24.04
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
@@ -46,17 +100,102 @@ jobs:
       - uses: actions/checkout@v7
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: nuage.flatpak
           manifest-path: build-aux/flatpak/io.github.felixilgatto.Nuage.yml
+          arch: ${{ matrix.arch }}
+          bundle: unsigned-${{ matrix.arch }}.flatpak
           cache: false
           upload-artifact: false
+      # The unsigned OSTree repository; flatpak-repo signs and merges them.
+      - run: tar -cf flatpak-repo-${{ matrix.arch }}.tar repo
       - uses: actions/upload-artifact@v4
         with:
-          name: flatpak
-          path: nuage.flatpak
+          name: flatpak-repo-${{ matrix.arch }}
+          path: flatpak-repo-${{ matrix.arch }}.tar
+
+  flatpak-repo:
+    needs: flatpak
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: flatpak-repo-*
+          merge-multiple: true
+      - name: Unpack the repositories
+        run: |
+          for arch in x86_64 aarch64; do
+            mkdir "repo-$arch" && tar -C "repo-$arch" --strip-components=1 -xf "flatpak-repo-$arch.tar"
+          done
+      - name: Signing key
+        env:
+          SIGNING_KEY: ${{ secrets.FLATPAK_SIGNING_KEY }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 -p "$GNUPGHOME"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ -z "$SIGNING_KEY" ]; then
+              echo "::error::the FLATPAK_SIGNING_KEY secret is missing (see docs/BUILDING.md, Releases)"
+              exit 1
+            fi
+            printf '%s\n' "$SIGNING_KEY" | gpg --batch --import
+          else
+            # A test run: a throw-away key, never published.
+            gpg --batch --passphrase '' --quick-gen-key "Nuage test key (not for release)" rsa4096 sign never
+          fi
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')" >> "$GITHUB_ENV"
+      - name: Signed repository, .flatpakref and bundles
+        run: scripts/flatpak-repo.sh "$KEY_ID" "$PAGES_URL" site bundles repo-x86_64 repo-aarch64
+      - name: Install, update, and update a bundle, as a new user
+        run: |
+          command -v python3 >/dev/null || dnf install -y -q python3
+          scripts/test-flatpak-repo.sh "$KEY_ID" site bundles/nuage-x86_64.flatpak
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundles
+          path: bundles/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-site
+          path: site/
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  # Checksums and provenance of everything a user downloads, test run or not.
+  collect:
+    needs: [version, native, flatpak-repo]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "{native-*,flatpak-bundles}"
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/
 
   publish:
-    needs: [native, flatpak]
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, collect]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -64,26 +203,21 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
+          name: release-files
           path: dist
-          merge-multiple: true
-      - name: Checksums
-        run: |
-          cd dist
-          rm -f SHA256SUMS
-          sha256sum -- * > SHA256SUMS
-          cat SHA256SUMS
       - name: Changelog of this version
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ needs.version.outputs.version }}"
           # The section "## [<version>]" of CHANGELOG.md, up to the next one.
           awk -v v="$version" '
             /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
             found { print }
           ' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
-            echo "::error::CHANGELOG.md has no section for $version"
-            exit 1
-          fi
+          {
+            echo
+            echo "**Install**: desktop, \`flatpak install --user $PAGES_URL/nuage.flatpakref\` (updates with \`flatpak update\`); servers, the \`.deb\`, \`.rpm\` or tarball below ([how](https://github.com/felixilgatto/nuage/blob/main/docs/SERVER.md))."
+            echo "Check a download: \`gh attestation verify <file> --repo felixilgatto/nuage\`."
+          } >> notes.md
           cat notes.md
       - name: Publish the release
         env:
@@ -91,3 +225,17 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Nuage ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag
+
+  pages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [flatpak-repo, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

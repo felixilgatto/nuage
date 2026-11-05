@@ -34,7 +34,8 @@ section = "utils"
 priority = "optional"
 depends = "fuse3"
 extended-description = """\
-Nuage mounts cloud storage accounts (Google Drive…) as local folders, with \
+Nuage mounts cloud storage accounts (Google Drive, OneDrive, Nextcloud, \
+WebDAV, S3…) as local folders, with \
 a local cache, pause and resume of uploads, and a status report. This \
 package contains the daemon (nuaged), the command-line tool (nuage) and the \
 bundled rclone; it has no graphical dependency."""
@@ -51,6 +52,30 @@ assets = [
     ["../../docs/TROUBLESHOOTING.md", "usr/share/doc/nuage/", "644"],
     ["../../target/rclone/COPYING", "usr/share/doc/nuage/rclone-COPYING", "644"],
 ]
+
+# RPM package of the same files (Fedora, openSUSE…), with cargo-generate-rpm.
+[package.metadata.generate-rpm]
+name = "nuage"
+summary = "Cloud storage as local folders: daemon and command line"
+license = "MIT"
+url = "https://github.com/felixilgatto/nuage"
+assets = [
+    { source = "target/release/nuaged", dest = "/usr/bin/nuaged", mode = "755" },
+    { source = "target/release/nuage", dest = "/usr/bin/nuage", mode = "755" },
+    { source = "../../target/rclone/rclone", dest = "/usr/lib/nuage/rclone", mode = "755" },
+    { source = "../../build-aux/native/nuaged.service", dest = "/usr/lib/systemd/user/nuaged.service", mode = "644" },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/nuage/LICENSE", mode = "644", doc = true },
+    { source = "../../target/rclone/COPYING", dest = "/usr/share/licenses/nuage/rclone-COPYING", mode = "644", doc = true },
+    { source = "../../README.md", dest = "/usr/share/doc/nuage/README.md", mode = "644", doc = true },
+    { source = "../../docs/SERVER.md", dest = "/usr/share/doc/nuage/SERVER.md", mode = "644", doc = true },
+    { source = "../../docs/PROVIDERS.md", dest = "/usr/share/doc/nuage/PROVIDERS.md", mode = "644", doc = true },
+    { source = "../../docs/GOOGLE_OAUTH.md", dest = "/usr/share/doc/nuage/GOOGLE_OAUTH.md", mode = "644", doc = true },
+    { source = "../../docs/CLI.md", dest = "/usr/share/doc/nuage/CLI.md", mode = "644", doc = true },
+    { source = "../../docs/TROUBLESHOOTING.md", dest = "/usr/share/doc/nuage/TROUBLESHOOTING.md", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+fuse3 = "*"
 
 [dev-dependencies]
 tempfile.workspace = true
