@@ -547,7 +547,7 @@ On later launches, if at least one account exists, the app launched by the user 
 
 ### Main window
 
-Minimal: the list of accounts (icon, name, ✓/↻/⚠/⏸ status, quota bar, "Open folder" button) and a "+" button to add an account. The browser opens from an account; it is never shown by default. The settings are in the main menu. Closing the window does not stop the sync.
+Minimal: the list of accounts (icon, name, ✓/↻/⚠/⏸ status, quota bar, "Open folder" and settings buttons) and a "+" button to add an account. The browser opens from an account; it is never shown by default. The settings are in the main menu. Closing the window does not stop the sync.
 
 ### System tray icon menu
 
@@ -577,8 +577,8 @@ In the CLI, `nuage daemon stop` applies the same setting; `--now` forces an imme
 
 ### Settings (`AdwPreferencesDialog`)
 
-- Global: autostart, "Quit" behavior, OAuth client, offline check interval (v1.1), offline space warning threshold (v1.1).
-- Per account: name, mount folder, cache limit, maximum cache age, exclusions, pinned items (v1.1), account removal.
+- Global (Preferences, in the main menu): autostart, "Quit" behavior, OAuth client, offline check interval (v1.1), offline space warning threshold (v1.1).
+- Per account (its own dialog, from the gear button of its row in the main window): name, mount folder, cache limit, maximum cache age, exclusions, pinned items (v1.1), account removal.
 
 ### Notifications (Notification portal)
 

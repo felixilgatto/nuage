@@ -350,15 +350,19 @@ then `PATH`; log in the user data folder) and never stops it on close.
 - Preferences (`ui/preferences.rs`, `AdwPreferencesDialog`, from the main
   menu, Ctrl+, or the tray): start at login, "quit with pending uploads",
   the providers' OAuth clients (`OAuthClientGet` / `OAuthClientSet`: a new
-  client signs its accounts out, then they are reconnected one by one);
-  per account: name, folder, sign in again, cache limit and age, the
-  default patterns and the user's exclusions, removal (with the daemon's
-  `busy` answer confirmed before `force`).
+  client signs its accounts out, then they are reconnected one by one).
+- Account settings (same file, one `AdwPreferencesDialog` per account, from
+  the gear button of its row in the main window or a notification's
+  "Settings" button, action `app.account-preferences`): name, folder, sign
+  in again, cache limit and age, offline items, the default patterns and
+  the user's exclusions, removal (with the daemon's `busy` answer confirmed
+  before `force`). Not tabs in Preferences, which would overflow with many
+  accounts.
 - Reconnecting (`ui/reconnect.rs`): `AccountReconnect` opens the sign-in
   in the browser, a dialog waits for `SignInWait` (Cancel, Copy link).
 - Notifications (`gio::Notification`, the portal in the Flatpak) for
   `AuthRequired` (button "Sign In"), `UploadFailed` and `CacheFull`
-  (button "Preferences"). The engine emits `AuthRequired` when the provider
+  (button "Settings"). The engine emits `AuthRequired` when the provider
   refuses the token (`operations/about` with `invalid_grant`…, checked with
   the quota); the account then shows an error and file commands answer
   `auth_required` (exit code 4). `UploadFailed` follows the count of
