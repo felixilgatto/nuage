@@ -247,6 +247,17 @@ impl TestEnv {
         (src, mount)
     }
 
+    /// Waits for the daemon to have mounted `name` at `mount`: since it
+    /// answers clients before its startup mounts are done, right after a
+    /// start they may still be in progress.
+    fn wait_mounted(&self, name: &str, mount: &Path) {
+        self.wait_until(
+            &format!("\"{name}\" is mounted"),
+            Duration::from_secs(20),
+            |env| env.account_state(name)["mounted"] == true && fuse_mounted(mount),
+        );
+    }
+
     fn wait_until(&self, what: &str, timeout: Duration, mut done: impl FnMut(&Self) -> bool) {
         let deadline = Instant::now() + timeout;
         while !done(self) {
@@ -417,8 +428,8 @@ fn account_lifecycle() {
     assert_eq!(env.account_state("Files")["state"]["state"], "stopped");
     env.stop_daemon();
     env.start_daemon();
+    env.wait_mounted("Local folder 2", &other_mount);
     assert_eq!(env.account_state("Files")["mounted"], false);
-    assert_eq!(env.account_state("Local folder 2")["mounted"], true);
     env.json(&["mount", "Files"]);
     assert!(fuse_mounted(&mount));
     assert_eq!(
@@ -493,9 +504,7 @@ fn restart_after_a_crash() {
     assert!(stale_socket.exists(), "a killed daemon leaves its socket");
 
     env.start_daemon();
-    let status = env.account_state("Crash");
-    assert_eq!(status["mounted"], true, "{status}");
-    assert!(fuse_mounted(&mount));
+    env.wait_mounted("Crash", &mount);
     assert_eq!(std::fs::read_to_string(mount.join("a.txt")).unwrap(), "a");
     // Only one rcd runs: the previous one was stopped.
     let rcds = Command::new("pgrep")
@@ -1258,18 +1267,19 @@ fn offline_pinning() {
                 .is_ok_and(|s| s == "b, remote version")
         },
     );
-    assert!(
+    // Counted once the conflict copy is uploaded, which can be just after
+    // the remote version shows in the folder.
+    env.wait_until("the conflict is counted", Duration::from_secs(10), |env| {
         env.account_state("Pins")["pins_conflicts"]
             .as_u64()
-            .unwrap()
-            >= 1
-    );
+            .is_some_and(|n| n >= 1)
+    });
 
     // Restart without network: the folder is there, pinned items open.
     std::fs::write(&offline_flag, "").unwrap();
     env.stop_daemon();
     env.start_daemon();
-    assert!(fuse_mounted(&mount), "mounted offline");
+    env.wait_mounted("Pins", &mount);
     assert_eq!(
         std::fs::read_to_string(mount.join("Passwords/db.kdbx")).unwrap(),
         "v2"
