@@ -4,6 +4,13 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- New providers: Dropbox and pCloud (sign in in the browser), Nextcloud and
+  WebDAV (server address and password), and S3 bucket storage (Amazon S3,
+  Cloudflare R2, Backblaze B2, MinIO…, with an access key; one bucket, or
+  all of them). Proton Drive is available as an experimental build option.
+- Accounts you add with a form (Nextcloud, WebDAV, S3…) are tried first: a
+  wrong password or bucket is reported at once, with what to check, instead
+  of giving a folder that shows nothing.
 - Folders mount after a restart even when the keyring is slow to answer at
   login (a session that logs in automatically, or a desktop portal still
   starting): Nuage waits for it instead of stopping. Meanwhile, the tray shows

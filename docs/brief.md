@@ -14,6 +14,8 @@ Sous Linux, monter un Google Drive ou un OneDrive est pénible : rclone sait tou
 
 v1 : Google Drive, **public dès la v1**. L'architecture est multi-fournisseurs dès le départ.
 
+**État au 2026-11-05** : v1, v1.1 et v2 (jalons 1 à 13) sont faits, sans publication pour l'instant (voir [Jalons](#jalons)). Fournisseurs livrés : Google Drive (avec les Drive partagés), OneDrive, Dropbox, pCloud, Nextcloud, WebDAV, stockage S3 ; Proton Drive est expérimental (feature hors `default`) ; `local` pour les tests.
+
 ## Consignes pour Claude Code
 
 1. **Ordre de travail** : suivre les [jalons](#jalons) dans l'ordre. Le jalon 1 (preuve que FUSE fonctionne depuis le Flatpak) passe avant tout le reste ; s'il échoue, s'arrêter et en parler.
@@ -43,9 +45,12 @@ Ces règles tranchent les cas non prévus par le brief.
 | Fonctionnalité | v1 | v1.1 | v2 | Jamais |
 |---|---|---|---|---|
 | Google Drive (« Mon Drive ») | ✔ | | | |
-| Drive partagés, « Partagés avec moi » | | | ✔ (ou plus tard) | |
+| Drive partagés (chacun un compte) | | | ✔ | |
+| « Partagés avec moi » (Google), SharePoint et OneDrive pro | | | plus tard | |
 | Fournisseur `local` (tests, CI) | ✔ | | | |
-| OneDrive, autres fournisseurs | possible tôt, pour valider l'abstraction | | ✔ | |
+| OneDrive (personnel) | | | ✔ | |
+| Dropbox, pCloud, Nextcloud, WebDAV, stockage S3 | | | ✔ (ajoutés le 2026-11-05) | |
+| Proton Drive | | | expérimental (backend rclone en bêta) | |
 | Montage par compte, dossier au choix | ✔ | | | |
 | Démon `nuaged` + CLI `nuage` | ✔ | | | |
 | Installation headless (binaire natif, service systemd) | ✔ | | | |
@@ -148,7 +153,7 @@ nuage/
 │  ├─ ipc/         nuage-ipc        protocole socket Unix : sérialisation, client, serveur
 │  ├─ rclone-rc/   nuage-rclone     client typé de l'API rc + supervision du processus rcd
 │  ├─ providers/   nuage-providers  trait Provider + registre + un module par fournisseur
-│  │   └─ src/{gdrive.rs, onedrive.rs, dropbox.rs, local.rs, …}   (une feature Cargo par fournisseur)
+│  │   └─ src/{gdrive, onedrive, dropbox, pcloud, protondrive, nextcloud, webdav, s3, local}.rs   (une feature Cargo par fournisseur)
 │  ├─ engine/      nuage-engine     comptes, montages, exclusions, épinglage, agrégation d'état
 │  ├─ fs/          nuage-fs         système de fichiers FUSE superposé (relais + exclusions en v1, épinglage en v1.1)
 │  ├─ daemon/      nuaged           binaire : engine + serveur ipc
@@ -190,7 +195,8 @@ nuage/
 
 ```rust
 AccountId
-Account   { id, provider_id, display_name, remote_name, mount_point, cache_limit }
+Account   { id, provider_id, display_name, remote_name, root, mount_point, cache_limit }
+          // root : dossier du remote montré par le compte (un bucket S3…), vide = tout le remote
 RemotePath { account, path }
 Entry     { name, path, kind: EntryKind /* File | Folder */, size, modified, mime, hash,
             native_doc: Option<NativeDoc> }      // Google Docs : lien web
@@ -219,13 +225,22 @@ pub trait Provider: Send + Sync {
     fn static_capabilities(&self) -> Capabilities;   // complétées à l'exécution par operations/fsinfo
     fn recommended_vfs_opts(&self) -> VfsOptions;
     fn native_docs(&self) -> Option<NativeDocPolicy>; // Google Docs → raccourcis web
+    // Facultatifs (implémentation par défaut) :
+    fn client_guide(&self) -> Vec<GuideStep>;        // étapes pour créer son client OAuth (gdrive)
+    fn client_id_suffix(&self) -> Option<&'static str>;
+    fn sub_drives(&self) -> Option<SubDrives>;       // Drive partagés : un compte chacun
+    fn choice_rank(&self, question: &str, choice: &str) -> u8; // questions de rclone après l'OAuth (drive OneDrive)
+    fn root(&self, input: &SetupInput) -> String;    // dossier du remote montré (bucket S3)
+    fn validate(&self, input: &SetupInput) -> Result<(), String>;
 }
 ```
 
+Détail à jour et une ligne par méthode : `docs/ADDING_A_PROVIDER.md`.
+
 - **Registre** : `ProviderRegistry`, construit à partir des features Cargo activées.
 - **Capacités réelles** = capacités statiques fusionnées avec `operations/fsinfo` (rclone y expose les `Features` du backend : `About`, `PublicLink`, `Copy`, `Move`, `PurgeTrash`…). **Les interfaces masquent ou refusent les actions selon `Capabilities`.**
-- **Fournisseur `local`** (backend rclone `local` ou `memory`) : pour les tests et la CI, sans identifiants.
-- **v1** : `gdrive` complet + `local`. `onedrive` peut être ajouté tôt pour valider l'abstraction (il est surtout déclaratif).
+- **Fournisseur `local`** (un `alias` rclone d'un dossier) : pour les tests et la CI, sans identifiants.
+- **Livrés** (features `default`) : `gdrive`, `onedrive`, `dropbox`, `pcloud`, `nextcloud`, `webdav`, `s3`, `local`. **Expérimental** : `protondrive`.
 
 ### Moteur (`engine`, dans `nuaged`)
 
@@ -295,7 +310,7 @@ En mode montage, rien n'est copié à l'avance. **« À jour » = aucune écritu
 
 **Google Drive :**
 
-- v1 : **« Mon Drive » uniquement**. Drive partagés et « Partagés avec moi » plus tard.
+- « Mon Drive », et chaque Drive partagé comme un compte à part, sans se reconnecter (`sub_drives`). « Partagés avec moi » plus tard.
 - scope `drive` : accès aux fichiers uniquement, aucun autre service Google ;
 - **client OAuth perso obligatoire, avec un parcours guidé.** Le client partagé de rclone « cessera de fonctionner courant 2026 » (avertissement de rclone 1.75), et un client propre à Nuage imposerait une vérification Google + un audit CASA (scope `drive` « restricted »). Chaque utilisateur crée donc son client GCP (type « Desktop app ») :
   - GUI : un écran guidé avant l'authentification (étapes numérotées, liens directs vers la console GCP, champs client ID / secret à coller, vérification immédiate) ;
@@ -304,7 +319,18 @@ En mode montage, rien n'est copié à l'avance. **« À jour » = aucune écritu
 - `drive` est un scope « restricted » : en statut *Testing*, les refresh tokens expirent au bout de 7 jours. Le guide fait publier le projet GCP en *Production* (non vérifié, suffisant pour un usage personnel) ;
 - **Google Docs/Sheets/Slides natifs** : présentés comme des **raccourcis web** dans le dossier monté, au format d'export rclone **`link.html`** (page qui redirige vers le document). Le format `desktop` s'ouvre dans l'éditeur de texte depuis Nautilus, donc il est écarté. Un double-clic ouvre `link.html` avec l'application HTML par défaut (normalement le navigateur). Les fichiers lien sont en lecture seule (rclone refuse de les modifier). Pas d'export docx/xlsx/pptx, donc ni doublons ni perte de mise en forme. Dans le navigateur de Nuage, ils sont signalés et s'ouvrent directement dans le navigateur web.
 
-**OneDrive** (quand il sera ajouté) : scopes `Files.ReadWrite.All` + `offline_access` uniquement (défaut rclone) ; app Azure perso facultative.
+**OneDrive** : OneDrive personnel du compte ; scopes `Files.ReadWrite.All` + `offline_access` uniquement (défaut rclone) ; client de rclone par défaut, app Azure perso facultative. Le drive nommé « OneDrive » est essayé en premier (`choice_rank`). Le Coffre-fort personnel ne s'ouvre pas hors des applications Microsoft.
+
+**Dropbox, pCloud** : OAuth dans le navigateur avec le client de rclone (client perso facultatif), comme OneDrive. pCloud trouve la région (US ou UE) à l'authentification.
+
+**Fournisseurs à identifiants** (`AuthSpec::Credentials`, un formulaire ; en CLI `--param clé=valeur`) :
+
+- **Nextcloud** : adresse du serveur (Nuage en déduit `…/remote.php/dav/files/<utilisateur>/`) ou adresse WebDAV copiée depuis Nextcloud, nom d'utilisateur, mot de passe d'application ; vendor rclone `nextcloud` (uploads par morceaux).
+- **WebDAV** : n'importe quel serveur WebDAV ; adresse complète, utilisateur et mot de passe facultatifs.
+- **S3** : Amazon S3 et compatibles (R2, B2, Wasabi, MinIO…) ; clés d'accès, endpoint (vide pour Amazon), région si besoin, et **bucket facultatif** : s'il est donné, le compte montre ce bucket (ou `bucket/dossier`) via `Account.root`, ce qui marche avec une clé limitée à ce bucket ; sinon chaque bucket est un dossier.
+- **Proton Drive** (expérimental) : adresse, mot de passe, code 2FA ; rclone garde la session. Une session terminée par Proton ne se reconnecte pas : supprimer et rajouter le compte. Le mot de passe de boîte séparé n'est pas géré.
+- rclone enregistre un formulaire sans l'essayer : **le moteur liste la racine du compte juste après sa création** (30 s au plus) et, en cas d'échec, supprime le remote et dit quoi corriger (champs remplis à vérifier, bucket inexistant, serveur injoignable).
+- Pas de changement poussé par ces backends : `DirCacheTime` d'une minute pour voir les modifications faites ailleurs.
 
 ### Montage et dossier de montage
 
@@ -561,6 +587,7 @@ Erreur d'upload, token expiré, cache plein, conflit hors ligne (v1.1). En headl
 
 - `rclone.conf` est chiffré avec `RCLONE_CONFIG_PASS`. Le mot de passe est rangé dans le trousseau : portail Secret (`ashpd`) dans le Flatpak, Secret Service (`org.freedesktop.secrets`) en natif s'il est disponible.
 - **Headless sans trousseau** : `rclone.conf` n'est pas chiffré mais protégé en `0600` (comme rclone par défaut). `nuage status` le signale et le README l'explique.
+- rclone obscurcit les mots de passe (WebDAV, Nextcloud, Proton) de façon réversible, mais pas les clés secrètes S3 ni les tokens OAuth : seul le chiffrement de `rclone.conf` les protège vraiment.
 - API rc sur 127.0.0.1, port et identifiants aléatoires à chaque lancement, jamais `--rc-no-auth`.
 - Socket IPC en `0600`, accessible au seul utilisateur.
 - Aucun token ni mot de passe dans les logs (filtre `tracing`).
@@ -720,7 +747,8 @@ Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucu
 | 10 | **Réglages et intégration** | Réglages, comportement de « Quit », notifications, dossier de montage par compte, exclusions dans la GUI. |
 | 11 | **Finitions → v1** | Job CI `flatpak`, `release.yml`, AppStream, icône, README et `docs/CLI.md` complets. |
 | 12 | **v1.1 — Hors ligne** | Épinglage dans `nuage-fs` : métadonnées SQLite, magasin d'épingles, renvoi, conflits, démarrage hors ligne, GUI + CLI. |
-| 13 | **v2** | OneDrive et autres fournisseurs, Drive partagés, puis Flathub. |
+| 13 | **v2** | OneDrive, Drive partagés ; Flathub reporté (voir ci-dessous). |
+| 14 | **Fournisseurs** | Dropbox, pCloud, Nextcloud, WebDAV, S3 (bucket comme racine du compte) ; Proton Drive expérimental ; vérification de la connexion des comptes à identifiants. Fait le 2026-11-05. |
 
 **Décidé après le jalon 13 (2026-11-01).** Pas de publication pour l'instant : l'utilisateur se sert de Nuage au quotidien, on le polit, puis il décide. Flathub est préparé (`docs/FLATHUB.md`) mais reporté (permission `org.freedesktop.Flatpak` à justifier, pas de Flathub par défaut sur Ubuntu) ; un dépôt Flatpak sur GitHub Pages est l'intermédiaire envisagé si les mises à jour automatiques comptent.
 
@@ -761,7 +789,7 @@ Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucu
 **Navigateur et modularité**
 
 - Le navigateur a le même design pour `gdrive` et `local` ; une action non supportée est masquée, pas en erreur.
-- Ajouter un fournisseur déclaratif (ex. OneDrive) ne modifie aucun fichier de `engine`, `ui`, `tray` ni `cli`.
+- Ajouter un fournisseur déclaratif (ex. OneDrive) ne modifie aucun fichier de `engine`, `ui`, `tray` ni `cli`. S3 a demandé une fois d'étendre l'abstraction (`Account.root`, `Provider::root`, vérification de connexion) ; les fournisseurs suivants en profitent sans toucher au moteur.
 
 **Exclusions**
 

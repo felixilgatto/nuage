@@ -19,10 +19,85 @@ use crate::mounts::{remote_fs, validate_mount_point};
 use crate::signin::{BROWSER_QUESTION, SignInKind};
 use crate::{Inner, State};
 
+/// How long the first connection of a new account may take.
+const CONNECTION_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn random_id() -> Result<String> {
     let mut buf = [0u8; 4];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// What the user reads when a new account's form values do not work.
+fn connection_error(
+    provider: &str,
+    root: &str,
+    labels: &[String],
+    e: &nuage_rclone::RcError,
+) -> Error {
+    let message = match e {
+        nuage_rclone::RcError::Api { message, .. } => message.clone(),
+        other => other.to_string(),
+    };
+    let m = message.to_ascii_lowercase();
+    let refused = [
+        "401",
+        "403",
+        "unauthorized",
+        "forbidden",
+        "access denied",
+        "invalidaccesskeyid",
+        "signaturedoesnotmatch",
+        "incorrect login",
+        "invalid password",
+        "password is incorrect",
+    ]
+    .iter()
+    .any(|s| m.contains(s));
+    if refused {
+        let what = match labels {
+            [] => "what you entered".to_owned(),
+            [one] => format!("the {one}"),
+            [rest @ .., last] => format!("the {} and {last}", rest.join(", ")),
+        };
+        return Error::InvalidArgument(format!("{provider} refused the connection: check {what}."));
+    }
+    if crate::files::is_not_found(e) {
+        return Error::InvalidArgument(if root.is_empty() {
+            format!("{provider} has nothing at this address: check it.")
+        } else {
+            format!("\"{root}\" does not exist on {provider}: check its name.")
+        });
+    }
+    // A server that does not answer: rclone retries until the timeout.
+    if matches!(e, nuage_rclone::RcError::Http(_)) {
+        return Error::Rclone(format!(
+            "Cannot reach {provider}: it does not answer. Check the address and your connection."
+        ));
+    }
+    if crate::files::is_offline(e) {
+        return Error::Rclone(format!(
+            "Cannot reach {provider}: check the address and your connection ({message})."
+        ));
+    }
+    Error::Rclone(format!("Cannot connect to {provider}: {message}"))
+}
+
+/// A form label as it reads in a sentence: "User Name (If Any)" → "user
+/// name". Acronyms ("ID", "WebDAV") keep their case.
+fn label_in_sentence(label: &str) -> String {
+    let label = label.split(" (").next().unwrap_or(label);
+    label
+        .split(' ')
+        .map(|w| {
+            if w.chars().skip(1).any(char::is_uppercase) {
+                w.to_owned()
+            } else {
+                w.to_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Number of files under `dir`.
@@ -249,6 +324,7 @@ impl Inner {
             }
         }
         provider.validate(&input).map_err(Error::InvalidArgument)?;
+        let root = provider.root(&input);
 
         let id = AccountId::new(random_id()?);
         let remote_name = format!("nuage-{id}");
@@ -303,12 +379,40 @@ impl Inner {
                 provider.display_name()
             )));
         }
+        // rclone saves a form's values without trying them: try them now,
+        // or a wrong password would give an account that shows nothing.
+        if let AuthSpec::Credentials { fields } = provider.auth()
+            && let Err(e) = rc
+                .list_within(&format!("{remote_name}:{root}"), "", CONNECTION_CHECK)
+                .await
+        {
+            let _ = rc.config_delete(&remote_name).await;
+            // The fields the user filled in: one of them is wrong.
+            let labels: Vec<String> = fields
+                .iter()
+                .filter(|f| {
+                    !f.folder
+                        && input
+                            .credentials
+                            .get(&f.key)
+                            .is_some_and(|v| !v.trim().is_empty())
+                })
+                .map(|f| label_in_sentence(&f.label))
+                .collect();
+            return Err(connection_error(
+                provider.display_name(),
+                &root,
+                &labels,
+                &e,
+            ));
+        }
 
         let account = Account {
             id,
             provider_id: provider.id().to_owned(),
             display_name: name,
             remote_name: remote_name.clone(),
+            root,
             mount_point,
             cache_limit: st.config.settings.default_cache_limit,
         };
@@ -803,5 +907,48 @@ mod tests {
         for bad in ["", " Work", "a:b", "a/b", "tab\there"] {
             assert!(check_name(bad).is_err(), "{bad:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    use nuage_rclone::RcError;
+
+    fn api(message: &str) -> RcError {
+        RcError::Api {
+            method: "operations/list".to_owned(),
+            status: 500,
+            message: message.to_owned(),
+        }
+    }
+
+    #[test]
+    fn messages() {
+        let labels = ["user name".to_owned(), "app password".to_owned()];
+        let e = connection_error(
+            "Nextcloud",
+            "",
+            &labels,
+            &api("couldn't list files: 401 Unauthorized"),
+        );
+        assert_eq!(
+            e.to_string(),
+            "Nextcloud refused the connection: check the user name and app password."
+        );
+        let e = connection_error("S3", "photos", &[], &api("directory not found"));
+        assert!(e.to_string().contains("\"photos\" does not exist"), "{e}");
+        let e = connection_error("WebDAV", "", &[], &api("dial tcp: connection refused"));
+        assert!(
+            e.to_string().starts_with("rclone: Cannot reach WebDAV"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn labels() {
+        assert_eq!(label_in_sentence("Access Key ID"), "access key ID");
+        assert_eq!(label_in_sentence("WebDAV Address"), "WebDAV address");
+        assert_eq!(label_in_sentence("Bucket (Empty for All)"), "bucket");
     }
 }

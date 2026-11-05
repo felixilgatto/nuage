@@ -24,7 +24,7 @@ use crate::mounts::remote_fs;
 #[derive(Debug)]
 struct Target {
     account: Account,
-    /// `"<remote>:"`.
+    /// `"<remote>:"` or `"<remote>:<root>"`.
     fs: String,
     /// The hidden rclone mount, when mounted.
     hidden: Option<PathBuf>,
@@ -38,7 +38,7 @@ struct Target {
 impl Target {
     /// The fs string of a folder of the account (`"remote:a/b"`).
     fn dir_fs(&self, path: &str) -> String {
-        format!("{}{path}", self.fs)
+        crate::mounts::join_fs(&self.fs, path)
     }
 
     /// `"Google Drive:Docs/a.txt"`, for messages.
@@ -83,7 +83,7 @@ pub(crate) fn clean(path: &str) -> Result<String> {
 }
 
 /// Whether rclone says that nothing is at the path.
-fn is_not_found(e: &RcError) -> bool {
+pub(crate) fn is_not_found(e: &RcError) -> bool {
     match e {
         RcError::Api { message, .. } => {
             let m = message.to_ascii_lowercase();
@@ -300,8 +300,9 @@ impl Inner {
             }
             Err(e) => match (&target.hidden, is_offline(&e)) {
                 (Some(hidden), true) => {
-                    let cache =
-                        self.paths.remote_cache_dirs(&target.account.remote_name)[0].clone();
+                    // rclone keeps the cache of `remote:root` in `<remote>/<root>`.
+                    let cache = self.paths.remote_cache_dirs(&target.account.remote_name)[0]
+                        .join(&target.account.root);
                     let hidden = hidden.clone();
                     let p = path.clone();
                     tokio::task::spawn_blocking(move || list_cached(&hidden, &cache, &p))

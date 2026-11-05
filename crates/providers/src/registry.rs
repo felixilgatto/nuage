@@ -26,6 +26,18 @@ impl ProviderRegistry {
         registry.register(Box::new(crate::gdrive::GoogleDrive));
         #[cfg(feature = "onedrive")]
         registry.register(Box::new(crate::onedrive::OneDrive));
+        #[cfg(feature = "dropbox")]
+        registry.register(Box::new(crate::dropbox::Dropbox));
+        #[cfg(feature = "pcloud")]
+        registry.register(Box::new(crate::pcloud::PCloud));
+        #[cfg(feature = "protondrive")]
+        registry.register(Box::new(crate::protondrive::ProtonDrive));
+        #[cfg(feature = "nextcloud")]
+        registry.register(Box::new(crate::nextcloud::Nextcloud));
+        #[cfg(feature = "webdav")]
+        registry.register(Box::new(crate::webdav::WebDav));
+        #[cfg(feature = "s3")]
+        registry.register(Box::new(crate::s3::S3));
         #[cfg(feature = "local")]
         registry.register(Box::new(crate::local::Local));
         registry
@@ -83,12 +95,25 @@ mod tests {
     #[test]
     fn enabled_providers() {
         let registry = ProviderRegistry::with_enabled_providers();
-        assert_eq!(registry.get("local").is_some(), cfg!(feature = "local"));
-        assert_eq!(registry.get("gdrive").is_some(), cfg!(feature = "gdrive"));
+        let features = [
+            ("local", cfg!(feature = "local")),
+            ("gdrive", cfg!(feature = "gdrive")),
+            ("onedrive", cfg!(feature = "onedrive")),
+            ("dropbox", cfg!(feature = "dropbox")),
+            ("pcloud", cfg!(feature = "pcloud")),
+            ("protondrive", cfg!(feature = "protondrive")),
+            ("nextcloud", cfg!(feature = "nextcloud")),
+            ("webdav", cfg!(feature = "webdav")),
+            ("s3", cfg!(feature = "s3")),
+        ];
+        for (id, enabled) in features {
+            assert_eq!(registry.get(id).is_some(), enabled, "{id}");
+        }
         assert!(registry.get("nope").is_none());
         let ids: Vec<_> = registry.iter().map(|p| p.id()).collect();
         let mut unique = ids.clone();
+        unique.sort_unstable();
         unique.dedup();
-        assert_eq!(ids, unique);
+        assert_eq!(ids.len(), unique.len());
     }
 }

@@ -37,9 +37,19 @@ the abstraction is missing something; extend `nuage-core` (e.g.
 | `client_guide()` *(optional)* | steps and URLs to create the user's own OAuth client; shown in the setup |
 | `sub_drives()` *(optional)* | other drives its accounts reach (rclone listing command, selecting parameter), each added as an account of its own |
 | `client_id_suffix()` *(optional)* | end of a valid client ID, to check what the user pastes |
+| `root(input)` *(optional)* | folder of the remote the account shows (e.g. the S3 bucket); empty for the whole remote |
 | `validate(input)` *(optional)* | checks the input before anything is created; the error says what to fix |
 | `choice_rank(question, choice)` *(optional)* | order in which to try the choices rclone offers for a question `config_params()` does not answer (e.g. the OneDrive drive); lower first |
 | `info()` *(provided)* | the description sent to clients; do not override |
+
+Helpers in `lib.rs` for the usual cases: `oauth_params()` (own client and
+token, for an OAuth provider using rclone's client by default), `field()`
+(a form field), `credential()` (a form value, trimmed, `None` when blank)
+and `check_web_address()` (an `https://` address, for `validate()`).
+
+A `Credentials` provider gets a connection check for free: the engine lists
+the account root right after `config/create` and refuses the account with a
+message naming the fields the user filled in.
 
 ## Rules
 

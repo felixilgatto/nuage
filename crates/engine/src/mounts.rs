@@ -36,9 +36,20 @@ impl MountPlan {
     }
 }
 
-/// The rclone fs string of an account's remote (`"<remote>:"`).
+/// The rclone fs string of an account's root (`"<remote>:"`, or
+/// `"<remote>:<root>"` for an account showing a folder of its remote).
 pub fn remote_fs(account: &Account) -> String {
-    format!("{}:", account.remote_name)
+    format!("{}:{}", account.remote_name, account.root)
+}
+
+/// The fs string of a folder below an fs string (`"remote:"` + `"a/b"`
+/// → `"remote:a/b"`; `"remote:bucket"` + `"a"` → `"remote:bucket/a"`).
+pub fn join_fs(fs: &str, path: &str) -> String {
+    if path.is_empty() || fs.ends_with(':') || fs.ends_with('/') {
+        format!("{fs}{path}")
+    } else {
+        format!("{fs}/{path}")
+    }
 }
 
 /// Builds the `mount/mount` request of an account.
@@ -616,6 +627,17 @@ fn check_empty(account: &Account, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fs_strings() {
+        let mut a = account("A", "/home/me/Cloud/A");
+        assert_eq!(remote_fs(&a), "nuage-A:");
+        assert_eq!(join_fs(&remote_fs(&a), "Docs/x"), "nuage-A:Docs/x");
+        a.root = "photos/2026".into();
+        assert_eq!(remote_fs(&a), "nuage-A:photos/2026");
+        assert_eq!(join_fs(&remote_fs(&a), "Raw"), "nuage-A:photos/2026/Raw");
+        assert_eq!(join_fs(&remote_fs(&a), ""), "nuage-A:photos/2026");
+    }
     use nuage_core::AccountId;
 
     fn account(name: &str, mount_point: &str) -> Account {
@@ -624,6 +646,7 @@ mod tests {
             provider_id: "local".into(),
             display_name: name.into(),
             remote_name: format!("nuage-{name}"),
+            root: String::new(),
             mount_point: mount_point.into(),
             cache_limit: 1 << 30,
         }

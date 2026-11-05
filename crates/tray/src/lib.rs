@@ -289,6 +289,7 @@ mod tests {
                 provider_id: "local".into(),
                 display_name: name.into(),
                 remote_name: format!("nuage-{name}"),
+                root: String::new(),
                 mount_point: format!("/home/me/Cloud/{name}").into(),
                 cache_limit: 1 << 30,
             },

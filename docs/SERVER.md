@@ -85,6 +85,29 @@ the server:
 nuage account add onedrive --token-file token.json --mount-point ~/Cloud/OneDrive
 ```
 
+## Connect Dropbox or pCloud
+
+Like OneDrive: `nuage account add dropbox --no-browser` (or `pcloud`), or a
+token made elsewhere with `rclone authorize dropbox` (or `pcloud`) and
+`--token-file token.json`.
+
+## Connect Nextcloud, WebDAV or S3
+
+No browser: the form's fields are `--param` options.
+
+```sh
+nuage account add nextcloud --param server=https://cloud.example.com \
+    --param user=<user name> --param pass=<app password>
+nuage account add webdav --param url=https://dav.example.com/files \
+    --param user=<user name> --param pass=<password>
+nuage account add s3 --param access_key_id=<key> --param secret_access_key=<secret> \
+    --param endpoint=<endpoint, empty for Amazon S3> --param region=<region, if needed> \
+    --param bucket=<bucket, or empty for all>
+```
+
+Passwords end up in your shell history: start the line with a space if your
+shell skips those, or clear it afterwards.
+
 ## Logs and uninstall
 
 - Logs: `journalctl --user -u nuaged`.

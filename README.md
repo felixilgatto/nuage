@@ -6,7 +6,8 @@
 **Nuage puts your cloud storage in a regular folder on Linux.** Open it in
 Files, work on your documents as usual: Nuage keeps them in sync.
 
-> **Early development.** Google Drive works today. The desktop app runs from
+> **Early development.** Google Drive and OneDrive are the most tested; the
+> other providers are new. The desktop app runs from
 > a source build; there is no Flatpak bundle yet.
 
 ## What it does
@@ -19,8 +20,9 @@ Files, work on your documents as usual: Nuage keeps them in sync.
 - Keep files and folders available offline (e.g. a password database).
 - Works on servers too, from the command line.
 
-Providers: **Google Drive** (with shared drives) and **OneDrive** today;
-others later ([details](docs/PROVIDERS.md)).
+Providers: **Google Drive** (with shared drives), **OneDrive**, **Dropbox**,
+**pCloud**, **Nextcloud**, **WebDAV** and **S3** bucket storage; Proton Drive
+is experimental ([details](docs/PROVIDERS.md)).
 
 ## Install
 

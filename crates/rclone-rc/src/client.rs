@@ -352,13 +352,27 @@ impl RcClient {
 impl RcClient {
     /// `operations/list` of one folder (not recursive).
     pub async fn list(&self, fs: &str, remote: &str) -> Result<Vec<ListItem>, RcError> {
+        self.list_within(fs, remote, LONG).await
+    }
+
+    /// [`list`](Self::list) with an explicit timeout.
+    pub async fn list_within(
+        &self,
+        fs: &str,
+        remote: &str,
+        timeout: Duration,
+    ) -> Result<Vec<ListItem>, RcError> {
         #[derive(Deserialize)]
         struct Answer {
             #[serde(default)]
             list: Vec<ListItem>,
         }
         let a: Answer = self
-            .call("operations/list", &json!({ "fs": fs, "remote": remote }))
+            .call_with_timeout(
+                "operations/list",
+                &json!({ "fs": fs, "remote": remote }),
+                timeout,
+            )
             .await?;
         Ok(a.list)
     }

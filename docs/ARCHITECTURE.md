@@ -65,7 +65,8 @@ so the headless package installs on a bare server.
 
 A provider is mostly declarative: rclone backend, `AuthSpec`, configuration
 parameters, static `Capabilities`, recommended VFS options, native-document
-policy. Real capabilities are the static ones merged with rclone's
+policy, and the folder of the remote an account shows (`root()`, e.g. an S3
+bucket; `Account.root`). Real capabilities are the static ones merged with rclone's
 `operations/fsinfo` features. Interfaces hide actions according to
 capabilities, never according to the provider name. Adding a provider means
 adding a module and a Cargo feature in `providers`, without touching
@@ -174,9 +175,14 @@ background task ticks every second:
   `rclone.conf`. The id is random and stable; users refer to accounts by
   name (case-insensitive), which can change.
 - `account add` creates the remote with `config/create` (`nonInteractive`),
-  mounts it, and rolls everything back if a step fails.
-- The `local` provider is an rclone `alias` of a folder, so every account's
-  root is `<remote>:`. Two `local` accounts over the same folder share one
+  mounts it, and rolls everything back if a step fails. For a
+  `Credentials` provider, rclone saves the form without trying it, so the
+  engine lists the account root first (30 s at most) and turns a failure
+  into what to fix.
+- An account's fs is `<remote>:<root>` (`mounts::remote_fs`), `root` being
+  empty for most providers; folders below it are built with
+  `mounts::join_fs`. The `local` provider is an rclone `alias` of a folder,
+  so its root is `<remote>:`. Two `local` accounts over the same folder share one
   rclone VFS (and upload queue): avoid it.
 - `account remove` unmounts, deletes the remote and the VFS cache (paths
   reported by `vfs/stats`), and the mount folder if empty. Refused while

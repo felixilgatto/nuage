@@ -37,6 +37,11 @@ pub struct Account {
     pub display_name: String,
     /// Name of the remote in `rclone.conf`.
     pub remote_name: String,
+    /// Folder of the remote the account shows, slash-separated, without
+    /// leading or trailing slash (e.g. an S3 bucket). Empty: the whole
+    /// remote.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root: String,
     /// Folder chosen by the user. This is *not* necessarily rclone's own mount
     /// point: from v1.1 on, `nuage-fs` is mounted here on top of a hidden
     /// rclone mount.

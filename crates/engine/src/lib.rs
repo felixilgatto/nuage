@@ -715,6 +715,7 @@ mod tests {
             provider_id: "local".into(),
             display_name: "Local folder".into(),
             remote_name: "nuage-0a1b2c3d".into(),
+            root: String::new(),
             mount_point: dir.path().join("Local folder"),
             cache_limit: 1 << 30,
         };

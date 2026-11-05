@@ -1377,3 +1377,140 @@ fn other_drives_need_a_provider_that_has_them() {
     let out = env.nuage(&["account", "add", "gdrive", "--from", "Plain"]);
     assert_eq!(out.status.code(), Some(2), "{}", env.describe(&out));
 }
+
+/// An `rclone serve` process, stopped when dropped.
+struct Server(Child);
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A free local port.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Serves `dir` with `rclone serve <kind>` on a free port; returns the
+/// server and its address.
+fn serve(env: &TestEnv, kind: &str, dir: &Path, auth: &[&str]) -> (Server, String) {
+    let port = free_port();
+    let address = format!("127.0.0.1:{port}");
+    let child = Command::new(&env.rclone)
+        .args(["serve", kind])
+        .arg(dir)
+        .args(["--addr", &address])
+        .args(auth)
+        .env("RCLONE_CONFIG", env.path("serve.conf"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let server = Server(child);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while std::net::TcpStream::connect(&address).is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "rclone serve {kind} did not start"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    (server, format!("http://{address}"))
+}
+
+#[test]
+fn webdav_and_s3_accounts_are_checked_and_mounted() {
+    let mut env = env_or_skip!();
+    env.start_daemon();
+
+    // WebDAV: a wrong password adds nothing; the right one mounts.
+    let dav = env.path("dav");
+    std::fs::create_dir_all(&dav).unwrap();
+    std::fs::write(dav.join("a.txt"), "dav").unwrap();
+    let (_dav, url) = serve(&env, "webdav", &dav, &["--user", "ana", "--pass", "pw"]);
+    let add_dav = |pass: &str| {
+        vec![
+            "account".to_owned(),
+            "add".into(),
+            "webdav".into(),
+            "--name".into(),
+            "Dav".into(),
+            "--mount-point".into(),
+            env.path("home/Cloud/Dav").display().to_string(),
+            "--param".into(),
+            format!("url={url}"),
+            "--param".into(),
+            "user=ana".into(),
+            "--param".into(),
+            format!("pass={pass}"),
+        ]
+    };
+    let wrong = add_dav("nope");
+    let wrong: Vec<&str> = wrong.iter().map(String::as_str).collect();
+    assert_eq!(env.json_error(&wrong, 2), "invalid_argument");
+    assert_eq!(env.status()["accounts"], Value::Array(vec![]));
+    let right = add_dav("pw");
+    let right: Vec<&str> = right.iter().map(String::as_str).collect();
+    env.json(&right);
+    let mount = env.path("home/Cloud/Dav");
+    env.wait_until("the WebDAV file", Duration::from_secs(10), |_| {
+        std::fs::read_to_string(mount.join("a.txt")).is_ok_and(|s| s == "dav")
+    });
+
+    // S3: one bucket as the account root; a missing bucket adds nothing.
+    let s3 = env.path("s3");
+    std::fs::create_dir_all(s3.join("photos")).unwrap();
+    std::fs::create_dir_all(s3.join("other")).unwrap();
+    std::fs::write(s3.join("photos/p.txt"), "photo").unwrap();
+    let (key, secret) = (
+        "AKIAIOSFODNN7EXAMPLE",
+        "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+    );
+    let (_s3, endpoint) = serve(&env, "s3", &s3, &["--auth-key", &format!("{key},{secret}")]);
+    let add_s3 = |name: &str, bucket: &str| {
+        vec![
+            "account".to_owned(),
+            "add".into(),
+            "s3".into(),
+            "--name".into(),
+            name.into(),
+            "--mount-point".into(),
+            env.path(&format!("home/Cloud/{name}"))
+                .display()
+                .to_string(),
+            "--param".into(),
+            format!("access_key_id={key}"),
+            "--param".into(),
+            format!("secret_access_key={secret}"),
+            "--param".into(),
+            format!("endpoint={endpoint}"),
+            "--param".into(),
+            format!("bucket={bucket}"),
+        ]
+    };
+    let missing = add_s3("Missing", "nope");
+    let missing: Vec<&str> = missing.iter().map(String::as_str).collect();
+    assert_eq!(env.json_error(&missing, 2), "invalid_argument");
+    let photos = add_s3("Photos", "photos");
+    let photos: Vec<&str> = photos.iter().map(String::as_str).collect();
+    env.json(&photos);
+    let mount = env.path("home/Cloud/Photos");
+    env.wait_until("the bucket's file", Duration::from_secs(10), |_| {
+        std::fs::read_to_string(mount.join("p.txt")).is_ok_and(|s| s == "photo")
+    });
+    assert!(!mount.join("other").exists(), "only the bucket is shown");
+    let listed = env.json(&["ls", "Photos:"]);
+    assert!(listed.to_string().contains("p.txt"), "{listed}");
+    // Writing goes into the bucket.
+    std::fs::write(mount.join("new.txt"), "new").unwrap();
+    env.wait_until("the upload", Duration::from_secs(30), |_| {
+        s3.join("photos/new.txt").exists()
+    });
+}

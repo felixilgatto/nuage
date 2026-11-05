@@ -10,19 +10,32 @@
 //! and a line in [`ProviderRegistry::with_enabled_providers`] — without
 //! touching `engine`, `ui`, `tray` or `cli`.
 
+#[cfg(feature = "dropbox")]
+pub mod dropbox;
 #[cfg(feature = "gdrive")]
 pub mod gdrive;
 #[cfg(feature = "local")]
 pub mod local;
+#[cfg(feature = "nextcloud")]
+pub mod nextcloud;
 #[cfg(feature = "onedrive")]
 pub mod onedrive;
+#[cfg(feature = "pcloud")]
+pub mod pcloud;
+#[cfg(feature = "protondrive")]
+pub mod protondrive;
+#[cfg(feature = "s3")]
+pub mod s3;
+#[cfg(feature = "webdav")]
+pub mod webdav;
 
 mod registry;
 
 pub use registry::ProviderRegistry;
 
 use nuage_core::{
-    AuthSpec, Capabilities, GuideStep, NativeDocPolicy, ProviderInfo, SetupInput, VfsOptions,
+    AuthSpec, Capabilities, CredentialField, GuideStep, NativeDocPolicy, ProviderInfo, SetupInput,
+    VfsOptions,
 };
 
 /// A storage provider (Google Drive, OneDrive, local…).
@@ -72,6 +85,13 @@ pub trait Provider: Send + Sync {
         0
     }
 
+    /// Folder of the remote the account shows (e.g. an S3 bucket),
+    /// slash-separated, without leading or trailing slash. Empty: the whole
+    /// remote.
+    fn root(&self, _input: &SetupInput) -> String {
+        String::new()
+    }
+
     /// Checks what the user provided before anything is created. The error
     /// is shown to the user and says what to fix.
     fn validate(&self, _input: &SetupInput) -> Result<(), String> {
@@ -99,5 +119,56 @@ pub trait Provider: Send + Sync {
             sub_drives: self.sub_drives(),
             capabilities: self.static_capabilities(),
         }
+    }
+}
+
+/// The `config/create` parameters of an OAuth provider using rclone's
+/// client by default: the user's own client and a token made elsewhere,
+/// when given.
+#[allow(dead_code)]
+pub(crate) fn oauth_params(input: &SetupInput) -> Vec<(String, String)> {
+    [
+        ("client_id", &input.client_id),
+        ("client_secret", &input.client_secret),
+        ("token", &input.token),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.as_ref().map(|v| (key.to_owned(), v.clone())))
+    .collect()
+}
+
+/// A field of a credentials form (not a folder).
+#[allow(dead_code)]
+pub(crate) fn field(key: &str, label: &str, secret: bool, required: bool) -> CredentialField {
+    CredentialField {
+        key: key.to_owned(),
+        label: label.to_owned(),
+        secret,
+        required,
+        folder: false,
+    }
+}
+
+/// A value of the credentials form, trimmed; `None` when absent or blank.
+#[allow(dead_code)]
+pub(crate) fn credential<'a>(input: &'a SetupInput, key: &str) -> Option<&'a str> {
+    input
+        .credentials
+        .get(key)
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+}
+
+/// Checks that the user entered a web address with its `https://`.
+#[allow(dead_code)]
+pub(crate) fn check_web_address(address: &str) -> Result<(), String> {
+    let rest = address
+        .strip_prefix("https://")
+        .or_else(|| address.strip_prefix("http://"));
+    match rest {
+        Some(host) if !host.is_empty() && !address.contains(char::is_whitespace) => Ok(()),
+        _ => Err(format!(
+            "\"{address}\" is not a web address: it starts with https://, e.g. https://cloud.example.com."
+        )),
     }
 }

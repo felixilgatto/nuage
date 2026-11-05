@@ -24,6 +24,10 @@ below, `exclude add | remove | list`, `config get | set` and
 nuage account add local --param root=/tmp/files      # a local folder (tests)
 nuage account add gdrive --client-id <id> --client-secret <secret>
 nuage account add onedrive                           # signs in in the browser
+nuage account add dropbox                            # also pcloud
+nuage account add nextcloud --param server=https://cloud.example.com --param user=ana --param pass=<app password>
+nuage account add webdav --param url=https://dav.example.com --param user=ana --param pass=<password>
+nuage account add s3 --param access_key_id=<key> --param secret_access_key=<secret> --param endpoint=<endpoint> --param bucket=<bucket>
 nuage account drives "Google Drive"                  # its shared drives
 nuage account add gdrive --from "Google Drive" --drive "Team"   # one, as an account
 nuage account list
