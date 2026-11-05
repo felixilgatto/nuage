@@ -324,13 +324,19 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
             }),
         );
     }
-    // A newer version installed while running: offer to restart.
     {
         let ui = Rc::clone(ui);
+        action("install-update", Box::new(move || ui.install_update()));
+    }
+    // Updates of Nuage itself: offer to install, then to restart.
+    {
+        let ui = Rc::clone(ui);
+        let updates = ui.backend.watch_updates();
         glib::spawn_future_local(async move {
-            ui.backend.wait_for_update().await;
-            tracing::info!("a new version is installed");
-            ui.update_installed();
+            while let Ok(event) = updates.recv().await {
+                tracing::info!(?event, "update of Nuage");
+                ui.update_event(event);
+            }
         });
     }
     // Notification button: open a folder.

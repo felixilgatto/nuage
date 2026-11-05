@@ -11,6 +11,7 @@ use gtk::{gio, glib};
 use nuage_core::{AccountId, AccountStatus, Command, ProviderInfo, Reply, StatusReport, SyncState};
 
 use crate::Backend;
+use crate::backend::UpdateEvent;
 
 /// Everything the interface shares.
 #[derive(Debug)]
@@ -32,7 +33,23 @@ pub(crate) struct UiState {
     pub(crate) tray: bool,
     /// Created the first time it is opened.
     pub(crate) browser: Option<Rc<crate::browser::Browser>>,
+    /// Where the update of Nuage itself stands, and its toast.
+    pub(crate) update: UpdateNotice,
+    pub(crate) update_toast: Option<adw::Toast>,
 }
+
+/// What the interface last said about an update of Nuage itself.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateNotice {
+    #[default]
+    None,
+    Available,
+    Installing,
+    Installed,
+}
+
+/// ID of the notification about an update of Nuage.
+const UPDATE_NOTIFICATION: &str = "update";
 
 /// A short, human state line.
 pub fn state_text(state: &SyncState) -> String {
@@ -131,17 +148,76 @@ impl Ui {
         self.toasts.add_toast(toast);
     }
 
+    /// Tells the user about an update of Nuage itself, once per step.
+    pub fn update_event(&self, event: UpdateEvent) {
+        let notice = self.state.borrow().update;
+        match event {
+            UpdateEvent::Available if notice == UpdateNotice::None => self.update_available(),
+            UpdateEvent::Installed if notice != UpdateNotice::Installed => self.update_installed(),
+            UpdateEvent::Failed(e) => self.update_failed(&e),
+            _ => {}
+        }
+    }
+
+    /// Installs the available update (button "Update").
+    pub fn install_update(&self) {
+        if self.state.borrow().update == UpdateNotice::Installing {
+            return;
+        }
+        self.show_update_toast(
+            adw::Toast::builder()
+                .title(gettext("Updating Nuage…"))
+                .timeout(0)
+                .build(),
+        );
+        self.app.withdraw_notification(UPDATE_NOTIFICATION);
+        self.state.borrow_mut().update = UpdateNotice::Installing;
+        self.backend.install_update();
+    }
+
+    /// Replaces the toast about the update, if any, with `toast`.
+    fn show_update_toast(&self, toast: adw::Toast) {
+        if let Some(old) = self.state.borrow_mut().update_toast.replace(toast.clone()) {
+            old.dismiss();
+        }
+        self.toasts.add_toast(toast);
+    }
+
+    /// A newer version is in the repository: offer to install it (a toast
+    /// that stays, and a notification, since the window is often closed).
+    fn update_available(&self) {
+        let text = gettext("A new version of Nuage is available");
+        self.show_update_toast(
+            adw::Toast::builder()
+                .title(&text)
+                .button_label(gettext("Update"))
+                .action_name("app.install-update")
+                .timeout(0)
+                .build(),
+        );
+        let notification = gio::Notification::new(&text);
+        notification.set_body(Some(&gettext(
+            "Update now, or later from Software. Your folders stay mounted while it downloads.",
+        )));
+        notification.set_default_action("app.open-window");
+        notification.add_button(&gettext("Update"), "app.install-update");
+        self.app
+            .send_notification(Some(UPDATE_NOTIFICATION), &notification);
+        self.state.borrow_mut().update = UpdateNotice::Available;
+    }
+
     /// A newer version is installed: offer to restart (a toast that stays,
     /// and a notification, since the window is often closed).
-    pub fn update_installed(&self) {
+    fn update_installed(&self) {
         let text = gettext("A new version of Nuage is installed");
-        let toast = adw::Toast::builder()
-            .title(&text)
-            .button_label(gettext("Restart"))
-            .action_name("app.restart")
-            .timeout(0)
-            .build();
-        self.toasts.add_toast(toast);
+        self.show_update_toast(
+            adw::Toast::builder()
+                .title(&text)
+                .button_label(gettext("Restart"))
+                .action_name("app.restart")
+                .timeout(0)
+                .build(),
+        );
         let notification = gio::Notification::new(&text);
         notification.set_body(Some(&gettext(
             "Restart Nuage to use it. Your folders are unmounted for a moment.",
@@ -149,7 +225,25 @@ impl Ui {
         notification.set_default_action("app.open-window");
         notification.add_button(&gettext("Restart"), "app.restart");
         self.app
-            .send_notification(Some("update-installed"), &notification);
+            .send_notification(Some(UPDATE_NOTIFICATION), &notification);
+        self.state.borrow_mut().update = UpdateNotice::Installed;
+    }
+
+    /// Installing the update failed: say so, and where else to update.
+    fn update_failed(&self, error: &str) {
+        tracing::warn!(error, "cannot install the update");
+        let mut text = gettext("Nuage could not update itself. Update it from Software instead.");
+        if !error.is_empty() {
+            text = format!("{text} ({error})");
+        }
+        self.show_update_toast(adw::Toast::builder().title(&text).timeout(0).build());
+        let notification = gio::Notification::new(&gettext("Nuage could not update itself"));
+        notification.set_body(Some(&gettext("Update it from Software instead.")));
+        notification.set_default_action("app.open-window");
+        self.app
+            .send_notification(Some(UPDATE_NOTIFICATION), &notification);
+        // Offered again if the monitor reports the update again.
+        self.state.borrow_mut().update = UpdateNotice::None;
     }
 
     pub fn set_tray_available(&self, available: bool) {
