@@ -352,27 +352,13 @@ impl RcClient {
 impl RcClient {
     /// `operations/list` of one folder (not recursive).
     pub async fn list(&self, fs: &str, remote: &str) -> Result<Vec<ListItem>, RcError> {
-        self.list_within(fs, remote, LONG).await
-    }
-
-    /// [`list`](Self::list) with an explicit timeout.
-    pub async fn list_within(
-        &self,
-        fs: &str,
-        remote: &str,
-        timeout: Duration,
-    ) -> Result<Vec<ListItem>, RcError> {
         #[derive(Deserialize)]
         struct Answer {
             #[serde(default)]
             list: Vec<ListItem>,
         }
         let a: Answer = self
-            .call_with_timeout(
-                "operations/list",
-                &json!({ "fs": fs, "remote": remote }),
-                timeout,
-            )
+            .call("operations/list", &json!({ "fs": fs, "remote": remote }))
             .await?;
         Ok(a.list)
     }
@@ -530,7 +516,30 @@ impl RcClient {
 
     /// Runs `method` as an `_async` job and waits for its end: transfers
     /// can outlast any HTTP timeout.
-    pub async fn job(&self, method: &str, mut params: Value) -> Result<Value, RcError> {
+    pub async fn job(&self, method: &str, params: Value) -> Result<Value, RcError> {
+        self.run_job(method, params, None)
+            .await
+            .map(|output| output.unwrap_or(Value::Null))
+    }
+
+    /// [`job`](Self::job) with a deadline: past it, rclone stops the job
+    /// (`job/stop`) and the answer is `Ok(None)`.
+    pub async fn job_within(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Option<Value>, RcError> {
+        self.run_job(method, params, Some(tokio::time::Instant::now() + timeout))
+            .await
+    }
+
+    async fn run_job(
+        &self,
+        method: &str,
+        mut params: Value,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<Option<Value>, RcError> {
         #[derive(Deserialize)]
         struct Started {
             jobid: u64,
@@ -540,12 +549,22 @@ impl RcClient {
         }
         let started: Started = self.call_with_timeout(method, &params, SHORT).await?;
         loop {
+            if deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
+                let _ = self
+                    .call_with_timeout::<_, IgnoredAny>(
+                        "job/stop",
+                        &json!({ "jobid": started.jobid }),
+                        SHORT,
+                    )
+                    .await;
+                return Ok(None);
+            }
             let status: JobStatus = self
                 .call_with_timeout("job/status", &json!({ "jobid": started.jobid }), SHORT)
                 .await?;
             if status.finished {
                 if status.success {
-                    return Ok(status.output.unwrap_or(Value::Null));
+                    return Ok(Some(status.output.unwrap_or(Value::Null)));
                 }
                 return Err(RcError::Api {
                     method: method.to_owned(),

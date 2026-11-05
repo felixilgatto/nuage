@@ -109,10 +109,10 @@ impl Provider for S3 {
         if !bucket.is_empty()
             && !bucket
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-.".contains(&b))
         {
             return Err(format!(
-                "\"{bucket}\" is not a bucket name: it has only letters, digits, dots and hyphens."
+                "\"{bucket}\" is not a bucket name: it has only lowercase letters, digits, dots and hyphens."
             ));
         }
         Ok(())

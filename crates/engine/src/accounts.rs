@@ -28,33 +28,53 @@ fn random_id() -> Result<String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// What the user reads when a new account's form values do not work.
+/// Whether `m` holds the HTTP status `code` on its own, not inside a number,
+/// an address or a port (`"401 Unauthorized"`, not `":8401"`).
+fn has_status(m: &str, code: &str) -> bool {
+    m.match_indices(code).any(|(i, _)| {
+        let before = m[..i].chars().next_back();
+        let after = m[i + code.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_digit() || c == ':' || c == '.')
+            && !after.is_some_and(|c| c.is_ascii_digit() || c == '.')
+    })
+}
+
+/// What the user reads when a new account's form values do not work;
+/// `e` is `None` when the server did not answer in time.
 fn connection_error(
     provider: &str,
     root: &str,
     filled: &[String],
     empty: &[String],
-    e: &nuage_rclone::RcError,
+    e: Option<&nuage_rclone::RcError>,
 ) -> Error {
+    let Some(e) = e else {
+        return Error::Rclone(format!(
+            "Cannot reach {provider}: it does not answer. Check the address and your connection."
+        ));
+    };
     let message = match e {
         nuage_rclone::RcError::Api { message, .. } => message.clone(),
-        other => other.to_string(),
+        // rclone itself failed, not the provider.
+        other => return Error::Rclone(format!("Cannot check the {provider} account: {other}")),
     };
     let m = message.to_ascii_lowercase();
-    let refused = [
-        "401",
-        "403",
-        "unauthorized",
-        "forbidden",
-        "access denied",
-        "invalidaccesskeyid",
-        "signaturedoesnotmatch",
-        "incorrect login",
-        "invalid password",
-        "password is incorrect",
-    ]
-    .iter()
-    .any(|s| m.contains(s));
+    let refused = has_status(&m, "401")
+        || has_status(&m, "403")
+        || [
+            "unauthorized",
+            "forbidden",
+            "access denied",
+            "accessdenied",
+            "invalidaccesskeyid",
+            "signaturedoesnotmatch",
+            "incorrect login",
+            "invalid password",
+            "password is incorrect",
+            "password was incorrect",
+        ]
+        .iter()
+        .any(|s| m.contains(s));
     if refused {
         let what = match filled {
             [] => "what you entered".to_owned(),
@@ -75,12 +95,6 @@ fn connection_error(
             format!("\"{root}\" does not exist on {provider}: check its name.")
         });
     }
-    // A server that does not answer: rclone retries until the timeout.
-    if matches!(e, nuage_rclone::RcError::Http(_)) {
-        return Error::Rclone(format!(
-            "Cannot reach {provider}: it does not answer. Check the address and your connection."
-        ));
-    }
     if crate::files::is_offline(e) {
         return Error::Rclone(format!(
             "Cannot reach {provider}: check the address and your connection ({message})."
@@ -98,21 +112,10 @@ fn list(items: &[String]) -> String {
     }
 }
 
-/// A form label as it reads in a sentence: "User Name (If Any)" → "user
-/// name". Acronyms ("ID", "WebDAV") keep their case.
-fn label_in_sentence(label: &str) -> String {
-    let label = label.split(" (").next().unwrap_or(label);
-    label
-        .split(' ')
-        .map(|w| {
-            if w.chars().skip(1).any(char::is_uppercase) {
-                w.to_owned()
-            } else {
-                w.to_lowercase()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+/// A form label as the message quotes it: "Bucket (Empty for All)" →
+/// "“Bucket”".
+fn short_label(label: &str) -> String {
+    format!("“{}”", label.split(" (").next().unwrap_or(label))
 }
 
 /// Number of files under `dir`.
@@ -396,31 +399,57 @@ impl Inner {
         }
         // rclone saves a form's values without trying them: try them now,
         // or a wrong password would give an account that shows nothing.
-        if let AuthSpec::Credentials { fields } = provider.auth()
-            && let Err(e) = rc
-                .list_within(&format!("{remote_name}:{root}"), "", CONNECTION_CHECK)
-                .await
-        {
-            let _ = rc.config_delete(&remote_name).await;
-            // One of the fields filled in is wrong, or an optional one left
-            // empty is needed (e.g. the bucket of a key limited to it).
-            let (filled, empty): (Vec<_>, Vec<_>) =
-                fields.iter().filter(|f| !f.folder).partition(|f| {
-                    input
-                        .credentials
-                        .get(&f.key)
-                        .is_some_and(|v| !v.trim().is_empty())
-                });
-            let labels = |fields: Vec<&nuage_core::CredentialField>| -> Vec<String> {
-                fields.iter().map(|f| label_in_sentence(&f.label)).collect()
+        // Without the state lock: the server may take its time.
+        if let AuthSpec::Credentials { fields } = provider.auth() {
+            drop(st);
+            let probe = rc
+                .job_within(
+                    "operations/list",
+                    serde_json::json!({ "fs": format!("{remote_name}:{root}"), "remote": "" }),
+                    CONNECTION_CHECK,
+                )
+                .await;
+            st = self.state.lock().await;
+            let failure = match probe {
+                Ok(Some(_)) => None,
+                Ok(None) => Some(None),
+                Err(e) => Some(Some(e)),
             };
-            return Err(connection_error(
-                provider.display_name(),
-                &root,
-                &labels(filled),
-                &labels(empty),
-                &e,
-            ));
+            if let Some(e) = failure {
+                let _ = rc.config_delete(&remote_name).await;
+                // One of the fields filled in is wrong, or an optional one
+                // left empty is needed (e.g. the bucket of a key limited to
+                // it).
+                let (filled, empty): (Vec<_>, Vec<_>) =
+                    fields.iter().filter(|f| !f.folder).partition(|f| {
+                        input
+                            .credentials
+                            .get(&f.key)
+                            .is_some_and(|v| !v.trim().is_empty())
+                    });
+                let labels = |fields: Vec<&nuage_core::CredentialField>| -> Vec<String> {
+                    fields.iter().map(|f| short_label(&f.label)).collect()
+                };
+                return Err(connection_error(
+                    provider.display_name(),
+                    &root,
+                    &labels(filled),
+                    &labels(empty),
+                    e.as_ref(),
+                ));
+            }
+            // Another account may have taken the name or the folder meanwhile.
+            let conflict = st.config.accounts.iter().find(|r| {
+                r.account.display_name.eq_ignore_ascii_case(&name)
+                    || (!args.no_mount && r.account.mount_point == mount_point)
+            });
+            if let Some(other) = conflict {
+                let _ = rc.config_delete(&remote_name).await;
+                return Err(Error::AlreadyExists(format!(
+                    "\"{}\" was added meanwhile with the same name or folder: try again.",
+                    other.account.display_name
+                )));
+            }
         }
 
         let account = Account {
@@ -941,42 +970,58 @@ mod connection_tests {
 
     #[test]
     fn messages() {
-        let labels = ["user name".to_owned(), "app password".to_owned()];
+        let labels = [short_label("User Name"), short_label("App Password")];
         let e = connection_error(
             "Nextcloud",
             "",
             &labels,
             &[],
-            &api("couldn't list files: 401 Unauthorized"),
+            Some(&api("couldn't list files: 401 Unauthorized")),
         );
         assert_eq!(
             e.to_string(),
-            "Nextcloud refused the connection: check the user name and app password."
+            "Nextcloud refused the connection: check the “User Name” and “App Password”."
         );
         let e = connection_error(
             "S3",
             "",
-            &["access key ID".to_owned()],
-            &["region".to_owned(), "bucket".to_owned()],
-            &api("ListBuckets, https response error StatusCode: 403"),
+            &[short_label("Access Key ID")],
+            &[
+                short_label("Region (If Required)"),
+                short_label("Bucket (Empty for All)"),
+            ],
+            Some(&api("ListBuckets, https response error StatusCode: 403")),
         );
         assert_eq!(
             e.to_string(),
-            "S3 refused the connection: check the access key ID, or fill in the region and bucket."
+            "S3 refused the connection: check the “Access Key ID”, or fill in the “Region” and “Bucket”."
         );
-        let e = connection_error("S3", "photos", &[], &[], &api("directory not found"));
+        let e = connection_error("S3", "photos", &[], &[], Some(&api("directory not found")));
         assert!(e.to_string().contains("\"photos\" does not exist"), "{e}");
-        let e = connection_error("WebDAV", "", &[], &[], &api("dial tcp: connection refused"));
+        // A port that contains 401 is not a refusal.
+        let e = connection_error(
+            "WebDAV",
+            "",
+            &[],
+            &[],
+            Some(&api(
+                "dial tcp 192.168.1.40:8401: connect: connection refused",
+            )),
+        );
         assert!(
             e.to_string().starts_with("rclone: Cannot reach WebDAV"),
             "{e}"
         );
+        let e = connection_error("WebDAV", "", &[], &[], None);
+        assert!(e.to_string().contains("it does not answer"), "{e}");
     }
 
     #[test]
-    fn labels() {
-        assert_eq!(label_in_sentence("Access Key ID"), "access key ID");
-        assert_eq!(label_in_sentence("WebDAV Address"), "WebDAV address");
-        assert_eq!(label_in_sentence("Bucket (Empty for All)"), "bucket");
+    fn status_codes() {
+        assert!(has_status("401 unauthorized", "401"));
+        assert!(has_status("statuscode: 403, requestid", "403"));
+        assert!(!has_status("dial tcp 10.0.0.1:4013", "401"));
+        assert!(!has_status("nas.local:8401", "401"));
+        assert!(!has_status("size 14030", "403"));
     }
 }
