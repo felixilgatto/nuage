@@ -1,9 +1,11 @@
-//! Preferences (`AdwPreferencesDialog`).
+//! Preferences and account settings (`AdwPreferencesDialog`).
 //!
-//! - General: start at login, what "Quit" does with pending uploads, the
-//!   sign-in clients of providers that use the user's own.
-//! - One page per account: name, folder, sign-in, cache limit and age,
-//!   exclusions, removal.
+//! - Preferences ([`show`]): start at login, what "Quit" does with pending
+//!   uploads, the sign-in clients of providers that use the user's own.
+//! - Account settings ([`show_account`], from the account's row in the main
+//!   window): name, folder, sign-in, cache limit and age, offline items,
+//!   exclusions, removal. One dialog per account, so many accounts never
+//!   crowd a tab bar.
 //!
 //! Every change goes to the daemon at once; nothing is applied on close.
 
@@ -15,7 +17,7 @@ use gettextrs::gettext;
 use gtk::glib;
 
 use nuage_core::{
-    AccountStatus, AuthKind, Command, CustomClient, DEFAULT_PATTERNS, Error, Exclusion,
+    AccountId, AccountStatus, AuthKind, Command, CustomClient, DEFAULT_PATTERNS, Error, Exclusion,
     ExclusionRule, ProviderInfo, Reply,
 };
 
@@ -71,24 +73,29 @@ fn gigabytes(value: &str) -> Option<f64> {
     Some((num * factor).round())
 }
 
-/// Opens the preferences over `parent`, at `account`'s page if given.
-pub fn show(ui: &Rc<Ui>, parent: &impl IsA<gtk::Widget>, account: Option<&nuage_core::AccountId>) {
+/// Opens the preferences over `parent`.
+pub fn show(ui: &Rc<Ui>, parent: &impl IsA<gtk::Widget>) {
     let dialog = adw::PreferencesDialog::builder()
         .search_enabled(false)
         .build();
     dialog.add(&general_page(ui, &dialog));
-    let providers = ui.providers();
-    for status in ui.accounts() {
-        let provider = providers
-            .iter()
-            .find(|p| p.id == status.account.provider_id)
-            .cloned();
-        let page = account_page(ui, &dialog, &status, provider.as_ref());
-        dialog.add(&page);
-        if account == Some(&status.account.id) {
-            dialog.set_visible_page(&page);
-        }
-    }
+    dialog.present(Some(parent));
+}
+
+/// Opens the settings of `account` over `parent`; nothing if it is unknown.
+pub fn show_account(ui: &Rc<Ui>, parent: &impl IsA<gtk::Widget>, account: &AccountId) {
+    let Some(status) = ui.accounts().into_iter().find(|s| &s.account.id == account) else {
+        return;
+    };
+    let provider = ui
+        .providers()
+        .into_iter()
+        .find(|p| p.id == status.account.provider_id);
+    let dialog = adw::PreferencesDialog::builder()
+        .search_enabled(false)
+        .title(&status.account.display_name)
+        .build();
+    dialog.add(&account_page(ui, &dialog, &status, provider.as_ref()));
     dialog.present(Some(parent));
 }
 
@@ -471,10 +478,10 @@ fn account_page(
         .show_apply_button(true)
         .build();
     {
-        let (ui, dialog, id, page) = (Rc::clone(ui), dialog.clone(), id.clone(), page.clone());
+        let (ui, dialog, id) = (Rc::clone(ui), dialog.clone(), id.clone());
         name.connect_apply(move |row| {
             let new = row.text().trim().to_owned();
-            let (ui, dialog, id, page) = (Rc::clone(&ui), dialog.clone(), id.clone(), page.clone());
+            let (ui, dialog, id) = (Rc::clone(&ui), dialog.clone(), id.clone());
             glib::spawn_future_local(async move {
                 match ui
                     .backend
@@ -485,7 +492,7 @@ fn account_page(
                     .await
                 {
                     Ok(_) => {
-                        page.set_title(&new);
+                        dialog.set_title(&new);
                         ui.reload().await;
                     }
                     Err(e) => dialog.add_toast(adw::Toast::new(&e)),

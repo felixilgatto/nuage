@@ -397,6 +397,15 @@ impl Ui {
             });
             row.add_suffix(&mount);
         }
+        let settings = gtk::Button::builder()
+            .icon_name("emblem-system-symbolic")
+            .tooltip_text(gettext("Account Settings"))
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .action_name("app.account-preferences")
+            .action_target(&account.id.as_str().to_variant())
+            .build();
+        row.add_suffix(&settings);
         // The browser opens from an account.
         row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
         row.set_activatable(true);

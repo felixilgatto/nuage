@@ -244,7 +244,7 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
             "preferences",
             Box::new(move || {
                 ui.present();
-                nuage_ui::preferences::show(&ui, &ui.window, None);
+                nuage_ui::preferences::show(&ui, &ui.window);
             }),
         );
     }
@@ -279,7 +279,7 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
                 return;
             };
             ui.present();
-            nuage_ui::preferences::show(&ui, &ui.window, Some(&AccountId::new(id)));
+            nuage_ui::preferences::show_account(&ui, &ui.window, &AccountId::new(id));
         });
     }
     app.add_action(&account_preferences);
@@ -486,7 +486,7 @@ fn notify(ui: &Ui, event: &Event) {
                 .replace("{}", &name(account)),
             ));
             n.add_button_with_target_value(
-                &gettext("Preferences"),
+                &gettext("Settings"),
                 "app.account-preferences",
                 Some(&account.as_str().to_variant()),
             );
@@ -507,7 +507,7 @@ fn notify(ui: &Ui, event: &Event) {
                 .replace("{limit}", &nuage_ui::human_size(*limit)),
             ));
             n.add_button_with_target_value(
-                &gettext("Preferences"),
+                &gettext("Settings"),
                 "app.account-preferences",
                 Some(&account.as_str().to_variant()),
             );
