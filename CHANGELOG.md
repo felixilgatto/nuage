@@ -4,6 +4,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-05
+
 - A homepage: <https://felixilgatto.github.io/nuage/>.
 - Each account's settings now open from a gear button on its row in the
   main window. Preferences keeps only the general settings, so adding many
