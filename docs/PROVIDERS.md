@@ -4,13 +4,17 @@
 |---|---|---|---|---|---|
 | Google Drive ("My Drive", shared drives) | available | browser, with [your own Google client](GOOGLE_OAUTH.md) | yes | yes | yes |
 | OneDrive (personal) | available | browser | yes | yes | yes |
-| Dropbox | available | browser | yes | yes | yes |
-| pCloud | available | browser | yes | yes | yes |
-| Proton Drive | experimental | Proton address, password and two-factor code | yes | no | yes |
 | Nextcloud | available | server address, user name and app password | yes | no | yes |
-| WebDAV | available | WebDAV address, user name and password | no | no | no |
+| WebDAV | available | WebDAV address, and a user name and password if the server asks | no | no | no |
 | S3 bucket storage (Amazon S3 and compatible) | available | access key | no | no | no |
+| Dropbox | preview | browser | yes | yes | yes |
+| pCloud | preview | browser | yes | yes | yes |
+| Proton Drive | preview, opt-in build | Proton address, password and two-factor code | yes | no | yes |
 | Local folder | for tests | none | yes | no | no |
+
+**Preview** providers are included but have not been tried with a real
+account yet. If you use one, please say how it went, good or bad, in an
+[issue](https://github.com/felixilgatto/nuage/issues).
 
 Nuage hides the actions a provider does not support. For the providers you
 sign in to with a form, Nuage tries the connection before adding the
@@ -36,31 +40,8 @@ account, and says what to check if it fails.
   SharePoint and OneDrive for work or school come later.
 - Office documents are regular files: they open in your usual applications.
 - Nothing to set up: sign in in your browser.
-- The **Personal Vault** ("Coffre-fort" in French) shows as a folder that
-  cannot be opened: Microsoft only opens it in its own apps.
-
-## Dropbox
-
-- Shows the whole Dropbox of the account you sign in with.
-- Nothing to set up: sign in in your browser.
-- Deleted files can be restored from dropbox.com.
-
-## pCloud
-
-- Shows the whole pCloud of the account you sign in with, in the US or the
-  EU region (found by the sign-in).
-- Nothing to set up: sign in in your browser.
-
-## Proton Drive
-
-Experimental: not in the regular builds yet (rclone's Proton Drive support
-is in beta). Build with the `protondrive` feature to try it.
-
-- Sign in with your Proton address and password, and the six-digit code of
-  your authenticator app if two-factor authentication is on.
-- Nuage keeps the session, not the code. If Proton ends the session, remove
-  the account and add it again.
-- Accounts with a separate mailbox password are not supported yet.
+- The **Personal Vault** (its name depends on your language) shows as a
+  folder that cannot be opened: Microsoft only opens it in its own apps.
 
 ## Nextcloud
 
@@ -89,6 +70,33 @@ is in beta). Build with the `protondrive` feature to try it.
 - For Amazon S3, leave the endpoint empty. Otherwise enter the endpoint your
   service gives (e.g. `https://<account>.r2.cloudflarestorage.com`) and, if
   it asks for one, the region.
+- Changes made elsewhere appear within a minute.
+
+## Dropbox (preview)
+
+- Shows the whole Dropbox of the account you sign in with.
+- Nothing to set up: sign in in your browser.
+- Deleted files can be restored from dropbox.com.
+
+## pCloud (preview)
+
+- Shows the whole pCloud of the account you sign in with, in the US or the
+  EU region (found by the sign-in).
+- Nothing to set up: sign in in your browser.
+- Changes made elsewhere appear within a minute.
+
+## Proton Drive (preview)
+
+Not in the regular builds yet: rclone's Proton Drive support is in beta. To
+try it, build Nuage from source with the `protondrive` feature
+(`cargo build --workspace --features nuage-providers/protondrive`; see
+[BUILDING.md](BUILDING.md)).
+
+- Sign in with your Proton address and password, and the six-digit code of
+  your authenticator app if two-factor authentication is on.
+- Nuage keeps the session, not the code. If Proton ends the session, remove
+  the account and add it again.
+- Accounts with a separate mailbox password are not supported yet.
 - Changes made elsewhere appear within a minute.
 
 ## Local folder

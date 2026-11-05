@@ -14,7 +14,7 @@ Sous Linux, monter un Google Drive ou un OneDrive est pénible : rclone sait tou
 
 v1 : Google Drive, **public dès la v1**. L'architecture est multi-fournisseurs dès le départ.
 
-**État au 2026-11-05** : v1, v1.1 et v2 (jalons 1 à 13) sont faits, sans publication pour l'instant (voir [Jalons](#jalons)). Fournisseurs livrés : Google Drive (avec les Drive partagés), OneDrive, Dropbox, pCloud, Nextcloud, WebDAV, stockage S3 ; Proton Drive est expérimental (feature hors `default`) ; `local` pour les tests.
+**État au 2026-11-05** : v1, v1.1 et v2 (jalons 1 à 14) sont faits, sans publication pour l'instant (voir [Jalons](#jalons)). Fournisseurs disponibles : Google Drive (avec les Drive partagés), OneDrive, Nextcloud, WebDAV, stockage S3 (essayés avec de vrais comptes ou serveurs). En *preview* (pas encore essayés avec un vrai compte) : Dropbox, pCloud, et Proton Drive (feature hors `default`). `local` pour les tests.
 
 ## Consignes pour Claude Code
 
@@ -49,8 +49,9 @@ Ces règles tranchent les cas non prévus par le brief.
 | « Partagés avec moi » (Google), SharePoint et OneDrive pro | | | plus tard | |
 | Fournisseur `local` (tests, CI) | ✔ | | | |
 | OneDrive (personnel) | | | ✔ | |
-| Dropbox, pCloud, Nextcloud, WebDAV, stockage S3 | | | ✔ (ajoutés le 2026-11-05) | |
-| Proton Drive | | | expérimental (backend rclone en bêta) | |
+| Nextcloud, WebDAV, stockage S3 | | | ✔ (ajoutés le 2026-11-05) | |
+| Dropbox, pCloud | | | preview (à essayer avec un vrai compte) | |
+| Proton Drive | | | preview, build opt-in (backend rclone en bêta) | |
 | Montage par compte, dossier au choix | ✔ | | | |
 | Démon `nuaged` + CLI `nuage` | ✔ | | | |
 | Installation headless (binaire natif, service systemd) | ✔ | | | |
@@ -240,7 +241,7 @@ Détail à jour et une ligne par méthode : `docs/ADDING_A_PROVIDER.md`.
 - **Registre** : `ProviderRegistry`, construit à partir des features Cargo activées.
 - **Capacités réelles** = capacités statiques fusionnées avec `operations/fsinfo` (rclone y expose les `Features` du backend : `About`, `PublicLink`, `Copy`, `Move`, `PurgeTrash`…). **Les interfaces masquent ou refusent les actions selon `Capabilities`.**
 - **Fournisseur `local`** (un `alias` rclone d'un dossier) : pour les tests et la CI, sans identifiants.
-- **Livrés** (features `default`) : `gdrive`, `onedrive`, `dropbox`, `pcloud`, `nextcloud`, `webdav`, `s3`, `local`. **Expérimental** : `protondrive`.
+- **Livrés** (features `default`) : `gdrive`, `onedrive`, `nextcloud`, `webdav`, `s3`, `local` ; en **preview** : `dropbox`, `pcloud`. **Preview hors `default`** : `protondrive`. Le statut preview est marqué par un commentaire `# Preview` dans `crates/providers/Cargo.toml` ; les fournisseurs preview viennent en dernier dans la liste.
 
 ### Moteur (`engine`, dans `nuaged`)
 
@@ -328,7 +329,7 @@ En mode montage, rien n'est copié à l'avance. **« À jour » = aucune écritu
 - **Nextcloud** : adresse du serveur (Nuage en déduit `…/remote.php/dav/files/<utilisateur>/`) ou adresse WebDAV copiée depuis Nextcloud, nom d'utilisateur, mot de passe d'application ; vendor rclone `nextcloud` (uploads par morceaux).
 - **WebDAV** : n'importe quel serveur WebDAV ; adresse complète, utilisateur et mot de passe facultatifs.
 - **S3** : Amazon S3 et compatibles (R2, B2, Wasabi, MinIO…) ; clés d'accès, endpoint (vide pour Amazon), région si besoin, et **bucket facultatif** : s'il est donné, le compte montre ce bucket (ou `bucket/dossier`) via `Account.root`, ce qui marche avec une clé limitée à ce bucket ; sinon chaque bucket est un dossier.
-- **Proton Drive** (expérimental) : adresse, mot de passe, code 2FA ; rclone garde la session. Une session terminée par Proton ne se reconnecte pas : supprimer et rajouter le compte. Le mot de passe de boîte séparé n'est pas géré.
+- **Proton Drive** (preview, build opt-in) : adresse, mot de passe, code 2FA ; rclone garde la session. Une session terminée par Proton ne se reconnecte pas : supprimer et rajouter le compte. Le mot de passe de boîte séparé n'est pas géré.
 - rclone enregistre un formulaire sans l'essayer : **le moteur liste la racine du compte juste après sa création** (30 s au plus) et, en cas d'échec, supprime le remote et dit quoi corriger (champs remplis à vérifier, bucket inexistant, serveur injoignable).
 - Pas de changement poussé par ces backends : `DirCacheTime` d'une minute pour voir les modifications faites ailleurs.
 
@@ -712,7 +713,7 @@ Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucu
 
 1. **Présentation** : une phrase, capture d'écran, badges CI et licence.
 2. **Fonctionnalités** : icône d'état, quota, navigateur unifié, dossier de montage par cloud, limite de cache, pause, exclusions, mode headless, hors ligne.
-3. **Fournisseurs** : tableau fournisseur / statut (stable, expérimental, prévu) / capacités (quota, lien de partage, corbeille).
+3. **Fournisseurs** : tableau fournisseur / statut (disponible, preview, prévu) / capacités (quota, lien de partage, corbeille).
 4. **Installation sur le bureau** : bundle Flatpak de la release (`flatpak install --user nuage.flatpak`), pré-requis `fuse3`.
 5. **Installation sur un serveur (headless)** : `.deb` ou tarball, service systemd, `enable-linger`, connexion d'un compte par tunnel SSH ou par token, exemple complet de bout en bout.
 6. **Compiler depuis les sources** : `flatpak-builder`, et développement hors Flatpak (`cargo run`, paquets apt).
@@ -748,7 +749,7 @@ Workflows dans `.github/workflows/`, sur le dépôt `felixilgatto/nuage`. **Aucu
 | 11 | **Finitions → v1** | Job CI `flatpak`, `release.yml`, AppStream, icône, README et `docs/CLI.md` complets. |
 | 12 | **v1.1 — Hors ligne** | Épinglage dans `nuage-fs` : métadonnées SQLite, magasin d'épingles, renvoi, conflits, démarrage hors ligne, GUI + CLI. |
 | 13 | **v2** | OneDrive, Drive partagés ; Flathub reporté (voir ci-dessous). |
-| 14 | **Fournisseurs** | Dropbox, pCloud, Nextcloud, WebDAV, S3 (bucket comme racine du compte) ; Proton Drive expérimental ; vérification de la connexion des comptes à identifiants. Fait le 2026-11-05. |
+| 14 | **Fournisseurs** | Dropbox, pCloud, Nextcloud, WebDAV, S3 (bucket comme racine du compte) ; Proton Drive en preview ; vérification de la connexion des comptes à identifiants. Nextcloud, WebDAV et S3 vérifiés contre Nextcloud 31, hacdias/webdav et MinIO en conteneurs ; Dropbox, pCloud et Proton restent à essayer avec de vrais comptes. Fait le 2026-11-05. |
 
 **Décidé après le jalon 13 (2026-11-01).** Pas de publication pour l'instant : l'utilisateur se sert de Nuage au quotidien, on le polit, puis il décide. Flathub est préparé (`docs/FLATHUB.md`) mais reporté (permission `org.freedesktop.Flatpak` à justifier, pas de Flathub par défaut sur Ubuntu) ; un dépôt Flatpak sur GitHub Pages est l'intermédiaire envisagé si les mises à jour automatiques comptent.
 

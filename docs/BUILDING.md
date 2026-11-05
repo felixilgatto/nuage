@@ -25,6 +25,10 @@ cargo run -p nuage -- account add local --param root=/tmp/files
 cargo run -p nuage -- status
 ```
 
+Proton Drive (preview) is left out of the default build; add it with
+`--features nuage-providers/protondrive` (with `--workspace` for the desktop
+app too).
+
 The end-to-end tests (`crates/cli/tests/e2e.rs`) start real `nuaged` and
 `nuage` processes with a temporary home. They skip themselves when rclone or
 FUSE is missing; `NUAGE_E2E_REQUIRED=1` (set in CI) makes that a failure.
@@ -81,7 +85,9 @@ scripts/cargo-sources.py
 ```
 
 Build, install for your user and run (needs `flatpak-builder`, or the
-`org.flatpak.Builder` Flatpak):
+`org.flatpak.Builder` Flatpak; with the latter, add `--disable-rofiles-fuse`
+if the build fails in `rofiles-fuse`, and keep the state and build
+directories under your home):
 
 ```sh
 flatpak run org.flatpak.Builder --user --install --force-clean \

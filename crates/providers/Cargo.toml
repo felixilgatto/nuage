@@ -15,12 +15,13 @@ default = ["local", "gdrive", "onedrive", "dropbox", "pcloud", "nextcloud", "web
 local = []
 gdrive = []
 onedrive = []
-dropbox = []
-pcloud = []
 nextcloud = []
 webdav = []
 s3 = []
-# Experimental: rclone's Proton Drive backend is in beta.
+# Preview: shipped, not yet tried with a real account.
+dropbox = []
+pcloud = []
+# Preview, outside `default`: rclone's Proton Drive backend is in beta.
 protondrive = []
 
 [dependencies]

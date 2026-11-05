@@ -26,18 +26,19 @@ impl ProviderRegistry {
         registry.register(Box::new(crate::gdrive::GoogleDrive));
         #[cfg(feature = "onedrive")]
         registry.register(Box::new(crate::onedrive::OneDrive));
-        #[cfg(feature = "dropbox")]
-        registry.register(Box::new(crate::dropbox::Dropbox));
-        #[cfg(feature = "pcloud")]
-        registry.register(Box::new(crate::pcloud::PCloud));
-        #[cfg(feature = "protondrive")]
-        registry.register(Box::new(crate::protondrive::ProtonDrive));
         #[cfg(feature = "nextcloud")]
         registry.register(Box::new(crate::nextcloud::Nextcloud));
         #[cfg(feature = "webdav")]
         registry.register(Box::new(crate::webdav::WebDav));
         #[cfg(feature = "s3")]
         registry.register(Box::new(crate::s3::S3));
+        // Preview providers last.
+        #[cfg(feature = "dropbox")]
+        registry.register(Box::new(crate::dropbox::Dropbox));
+        #[cfg(feature = "pcloud")]
+        registry.register(Box::new(crate::pcloud::PCloud));
+        #[cfg(feature = "protondrive")]
+        registry.register(Box::new(crate::protondrive::ProtonDrive));
         #[cfg(feature = "local")]
         registry.register(Box::new(crate::local::Local));
         registry

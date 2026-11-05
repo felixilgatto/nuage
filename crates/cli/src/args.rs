@@ -103,7 +103,7 @@ pub enum Commands {
     /// Inspect or stop the daemon.
     #[command(subcommand)]
     Daemon(DaemonCommand),
-    /// Keep files available offline (v1.1).
+    /// Keep files available offline.
     #[command(subcommand)]
     Pin(PinCommand),
 }

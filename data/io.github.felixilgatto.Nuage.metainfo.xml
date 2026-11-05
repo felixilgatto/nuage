@@ -17,16 +17,17 @@
       background.
     </p>
     <ul>
-      <li>Set up an account in a few screens, signed in through your browser</li>
+      <li>Set up an account in a few screens, signed in through your browser or with a password</li>
       <li>See what is syncing, pause and resume uploads</li>
       <li>Browse, upload, move and share files, even when an account is not mounted</li>
       <li>Keep folders or patterns out of the sync</li>
+      <li>Keep files and folders available offline</li>
       <li>Google Docs open in your web browser</li>
     </ul>
     <p>
-      Nuage uses rclone. Google Drive, OneDrive, Dropbox, pCloud, Nextcloud,
-      WebDAV and S3 bucket storage are supported; for Google Drive, your own
-      sign-in client keeps your access private to you.
+      Nuage uses rclone. Google Drive, OneDrive, Nextcloud, WebDAV and S3
+      bucket storage are supported, and Dropbox and pCloud in preview; for
+      Google Drive, your own sign-in client keeps your access private to you.
     </p>
   </description>
   <launchable type="desktop-id">io.github.felixilgatto.Nuage.desktop</launchable>

@@ -13,10 +13,10 @@ Every command accepts `--json`. Exit codes:
 | 3 | daemon unreachable |
 | 4 | authentication required |
 
-Commands: `status [--watch]`, `account add | list | rename | reconnect |
-remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, the file commands
-below, `exclude add | remove | list`, `config get | set` and
-`daemon status | stop`, `pin add | remove | list`.
+Commands: `status [--watch]`, `account add | drives | list | rename | move |
+reconnect | remove`, `mount`, `unmount`, `pause`, `resume`, `refresh`, the
+file commands below, `exclude add | remove | list`, `pin add | remove |
+list`, `config get | set` and `daemon status | stop`.
 
 ## Accounts
 
@@ -24,7 +24,7 @@ below, `exclude add | remove | list`, `config get | set` and
 nuage account add local --param root=/tmp/files      # a local folder (tests)
 nuage account add gdrive --client-id <id> --client-secret <secret>
 nuage account add onedrive                           # signs in in the browser
-nuage account add dropbox                            # also pcloud
+nuage account add dropbox                            # also pcloud (both in preview)
 nuage account add nextcloud --param server=https://cloud.example.com --param user=ana --param pass=<app password>
 nuage account add webdav --param url=https://dav.example.com --param user=ana --param pass=<password>
 nuage account add s3 --param access_key_id=<key> --param secret_access_key=<secret> --param endpoint=<endpoint> --param bucket=<bucket>
@@ -32,11 +32,19 @@ nuage account drives "Google Drive"                  # its shared drives
 nuage account add gdrive --from "Google Drive" --drive "Team"   # one, as an account
 nuage account list
 nuage account rename "Google Drive" "Work"
-nuage account remove "Work"
+nuage account move "Work" ~/Work                     # mount it at another folder
+nuage account remove "Work" --yes                    # nothing is deleted in the cloud
 ```
 
+`account add` takes `--name` (default: the provider's name) and
+`--mount-point` (default: `~/Cloud/<name>`). `account remove` is refused
+while uploads are pending; `--force` removes the account anyway and loses
+them. `nuage daemon stop` finishes pending uploads first; `--now` does not
+wait.
+
 Google Drive needs your own OAuth client: see
-[GOOGLE_OAUTH.md](GOOGLE_OAUTH.md).
+[GOOGLE_OAUTH.md](GOOGLE_OAUTH.md). The `--param` names of each provider
+are in [SERVER.md](SERVER.md#connect-nextcloud-webdav-or-s3).
 
 ## Files
 
@@ -106,9 +114,9 @@ Offline, items that are not pinned stay listed (greyed in the browser, as
 | Key | Value |
 |---|---|
 | `cache-limit` | cache limit of new accounts, e.g. `20G` |
-| `<account>:cache-limit` | cache limit of one account |
 | `cache-max-age` | how long unused files stay in the cache, e.g. `30d` |
-| `<account>:cache-limit`, `<account>:cache-max-age` | the same for one account (`default`: the global value) |
+| `<account>:cache-limit` | cache limit of one account |
+| `<account>:cache-max-age` | the same for one account (`default`: the global value) |
 | `offline-check-interval` | how often the connection is checked and pinned items synced, e.g. `30s` |
 | `offline-warning` | warn (notification, `nuage status`) when an account keeps more offline, e.g. `10G`, or `off` (default) |
 | `<account>:default-exclusions` | `on` or `off`: exclude temporary and lock files |

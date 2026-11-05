@@ -19,7 +19,8 @@ Read, do not guess:
 
 - `crates/providers/Cargo.toml`: one feature per provider. A provider in
   `default` is **shipped**; one with a feature outside `default` is
-  **experimental**.
+  **opt-in**. Features under the `# Preview` comments are **preview**:
+  not yet tried with a real account.
 - `crates/providers/src/registry.rs`: `with_enabled_providers()` gives the
   order shown to the user. Use the same order everywhere.
 - `crates/providers/src/<id>.rs`, for each provider:
@@ -58,11 +59,15 @@ Check every item; edit only what is out of date.
    | OneDrive | planned (v2) | | | | |
    ```
 
+   Then one line explaining *preview*, with the issues link, when a
+   provider has that status.
+
    Then one short section per shipped provider: what it shows (scope
    limits), how special documents appear, anything the user must do once.
-   Status is `available` (in `default`), `experimental` (feature outside
-   `default`), `for tests` (the `local` provider) or `planned (vX)`
-   (brief only). Capability columns come from `static_capabilities()`; say
+   Status is `available` (in `default`, tried with a real account or
+   server), `preview` (under a `# Preview` comment, in `default`),
+   `preview, opt-in build` (under a `# Preview` comment, outside `default`),
+   `for tests` (the `local` provider) or `planned (vX)` (brief only). Capability columns come from `static_capabilities()`; say
    in one line under the table that Nuage hides actions a provider does not
    support.
 2. **`README.md`**: the single "Providers:" line under "What it does" names

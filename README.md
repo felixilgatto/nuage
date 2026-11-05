@@ -6,9 +6,9 @@
 **Nuage puts your cloud storage in a regular folder on Linux.** Open it in
 Files, work on your documents as usual: Nuage keeps them in sync.
 
-> **Early development.** Google Drive and OneDrive are the most tested; the
-> other providers are new. The desktop app runs from
-> a source build; there is no Flatpak bundle yet.
+> **Early development.** Google Drive and OneDrive are the most tested.
+> Dropbox, pCloud and Proton Drive are in preview. The desktop app runs
+> from a source build for now: there is no Flatpak bundle yet.
 
 ## What it does
 
@@ -20,9 +20,10 @@ Files, work on your documents as usual: Nuage keeps them in sync.
 - Keep files and folders available offline (e.g. a password database).
 - Works on servers too, from the command line.
 
-Providers: **Google Drive** (with shared drives), **OneDrive**, **Dropbox**,
-**pCloud**, **Nextcloud**, **WebDAV** and **S3** bucket storage; Proton Drive
-is experimental ([details](docs/PROVIDERS.md)).
+Providers: **Google Drive** (with shared drives), **OneDrive**, **Nextcloud**,
+**WebDAV** and **S3** bucket storage (Amazon S3, Cloudflare R2, Backblaze B2,
+MinIO…); in preview, **Dropbox**, **pCloud** and **Proton Drive**
+([details](docs/PROVIDERS.md)).
 
 ## Install
 
@@ -51,13 +52,17 @@ Requirement: `fuse3` (installed by default on Ubuntu).
 
    Flatpak does not remove the start-at-login entry: the second line does.
    Your cloud folders stay, empty; delete them if you want.
-3. Optionally, withdraw Nuage's access to your account on the provider's
-   site (Google: <https://myaccount.google.com/permissions>).
+3. Optionally, withdraw Nuage's access on the provider's side: Google
+   <https://myaccount.google.com/connections>, Microsoft
+   <https://account.live.com/consent/Manage>, Dropbox
+   <https://www.dropbox.com/account/connected_apps>; or delete the app
+   password or access key you created for Nuage.
 
 ## Get started
 
 1. Open Nuage and pick a provider.
-2. Sign in in your browser.
+2. Sign in: in your browser, or, for Nextcloud, WebDAV, S3 and Proton
+   Drive, with an address and a password or access key.
 3. Choose the folder.
 
 That's it. For your first Google account, Nuage first guides you through

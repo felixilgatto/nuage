@@ -4,22 +4,21 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
-- New providers: Dropbox and pCloud (sign in in the browser), Nextcloud and
-  WebDAV (server address and password), and S3 bucket storage (Amazon S3,
-  Cloudflare R2, Backblaze B2, MinIO…, with an access key; one bucket, or
-  all of them). Proton Drive is available as an experimental build option.
-- Accounts you add with a form (Nextcloud, WebDAV, S3…) are tried first: a
-  wrong password or bucket is reported at once, with what to check, instead
-  of giving a folder that shows nothing.
+- New providers: Nextcloud and WebDAV (server address and password), and S3
+  bucket storage (Amazon S3, Cloudflare R2, Backblaze B2, MinIO…, with an
+  access key; one bucket, or all of them).
+- In preview, not yet tried with real accounts: Dropbox and pCloud (sign in
+  in the browser), and Proton Drive as a build option.
+- Nuage checks the connection before adding an account set up with a form
+  (Nextcloud, WebDAV, S3, Proton Drive): a wrong password or bucket is
+  reported at once, with what to check, instead of giving a folder that
+  shows nothing.
 - Folders mount after a restart even when the keyring is slow to answer at
   login (a session that logs in automatically, or a desktop portal still
   starting): Nuage waits for it instead of stopping. Meanwhile, the tray shows
   "Waiting for the keyring" with a key, not a problem; it becomes a problem
   after 3 minutes. The window starts the Nuage service again if it crashes.
-- OneDrive: the drive named "OneDrive" is tried first; adding an account on a
-  server with `--token-file` answers the same questions as a sign-in.
 - Removing an account no longer fills the log with errors about its cache.
-- The OneDrive Personal Vault, which cannot be opened, is documented.
 - After an update installed while Nuage runs, folders still mount, and Nuage
   offers to restart into the new version.
 - Leaving the folder screen without starting the sync no longer leaves a
@@ -27,8 +26,10 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 - After adding an account, the window stays open on the accounts list, with
   "Open Folder"; "Start Sync" shows that it is working.
 - How to uninstall, in the README.
-- Adding a OneDrive account no longer stops at "rclone still asks config_driveid": Nuage takes the drive rclone proposes, and the next one if Microsoft refuses it.
-- OneDrive (personal): sign in in the browser, no client to create.
+- OneDrive (personal): sign in in the browser, no client to create. Nuage
+  picks your own drive (the one named "OneDrive"), and the next one if
+  Microsoft refuses it; on a server, `--token-file` works the same way. The
+  Personal Vault, which cannot be opened, is documented.
 - Google shared drives, each as an account of its own, added from a Google
   account without signing in again.
 - Offline mode: keep files and folders on this computer ("Keep Offline" in

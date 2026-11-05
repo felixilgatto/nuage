@@ -5,9 +5,9 @@ the mounting, caching, OAuth and transfers; Nuage does not reimplement a sync
 engine. The one exception is `nuage-fs`, an overlay filesystem for exact
 exclusions and, in v1.1, offline pinning.
 
-> Status: milestone 12 (v1.1). The daemon supervises rclone, signs in to Google
-> Drive, mounts each account in two layers (`nuage-fs` over a hidden rclone
-> mount), applies exclusions, pauses uploads, reports the status and runs
+> Status: milestone 14. The daemon supervises rclone, signs in to the
+> providers (browser or form), mounts each account in two layers (`nuage-fs`
+> over a hidden rclone mount), applies exclusions, pauses uploads, reports the status and runs
 > file operations; the CLI and the desktop application (setup, main window,
 > tray, file browser) drive all of it. Offline pinning (v1.1) is in.
 
@@ -446,7 +446,9 @@ daemon on failure every 10 s without limit.
   Debian 12 containers, mounts a `local` account and reads and writes
   through it.
 - `crates/cli/tests/e2e.rs`: real `nuaged` and `nuage` processes, a real
-  rclone and FUSE, the `local` provider, an isolated home. Covers adding,
+  rclone and FUSE, the `local` provider, an isolated home, plus WebDAV and
+  S3 accounts against `rclone serve` (connection check, one bucket as the
+  account root). Covers adding,
   renaming, mounting (both layers), unmounting, removing accounts, pause
   across restarts, recovery after `SIGKILL` of the daemon, the user's
   folder surviving `SIGKILL` of rclone, settings and error codes. CI installs the

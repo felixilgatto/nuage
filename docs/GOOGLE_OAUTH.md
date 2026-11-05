@@ -1,8 +1,8 @@
 # Create your own Google OAuth client
 
-Google Drive needs an OAuth client of your own: rclone's shared client stops
-working in 2026, and a client shared by all Nuage users would need a costly
-Google audit. Creating yours takes about five minutes and is free. You do it
+Google Drive needs an OAuth client of your own: rclone's shared Google
+client is being retired, and a client shared by all Nuage users would need
+a costly Google audit. Creating yours takes about five minutes and is free. You do it
 once; your other Google accounts reuse it.
 
 The desktop app walks you through these same steps.

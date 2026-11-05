@@ -16,6 +16,20 @@
 - **Google asks you to sign in every week**: your OAuth app is still in
   *Testing*; publish it (step 4 of [GOOGLE_OAUTH.md](GOOGLE_OAUTH.md)), then
   run `nuage account reconnect "Google Drive"`.
+- **"… refused the connection" when adding an account** (Nextcloud,
+  WebDAV, S3, Proton Drive): one of the values is wrong, and nothing was
+  added. Common
+  causes:
+  - Nextcloud with two-factor authentication accepts only an app password
+    (Personal settings → Security → Create new app password).
+  - An S3 key limited to one bucket (usual with Cloudflare R2 and Backblaze
+    B2) needs that bucket's name in **Bucket**.
+  - Amazon S3 outside `us-east-1` may need its **Region**.
+- **Changes made on another device show up late**: Nextcloud, WebDAV, S3,
+  pCloud and Proton Drive do not announce changes, so Nuage looks for them every minute.
+  `nuage refresh` shows them at once.
+- **Proton Drive stops working and asks to sign in again**: remove the
+  account and add it again; Proton ended the session.
 - **The OneDrive "Personal Vault" folder cannot be opened**: Microsoft does
   not let other applications open it. Use the OneDrive website or app for
   the files it holds.

@@ -6,5 +6,5 @@ Exec=nuage-gtk
 Icon=io.github.felixilgatto.Nuage
 Terminal=false
 Categories=Network;FileTransfer;GTK;
-Keywords=cloud;drive;google;sync;storage;mount;
+Keywords=cloud;drive;google;onedrive;dropbox;nextcloud;webdav;s3;sync;storage;mount;
 StartupNotify=true
