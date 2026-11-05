@@ -14,7 +14,7 @@ On Linux, mounting a Google Drive or a OneDrive is painful: rclone can do everyt
 
 v1: Google Drive, **public from v1**. The architecture is multi-provider from the start.
 
-**Status as of 2026-11-05**: v1, v1.1 and v2 (milestones 1 to 14) are done, not published for now (see [Milestones](#milestones)). Available providers: Google Drive (with shared drives), OneDrive, Nextcloud, WebDAV, S3 storage (tried with real accounts or servers). In *preview* (not yet tried with a real account): Dropbox, pCloud, and Proton Drive (feature outside `default`). `local` for tests.
+**Status as of 2026-11-05**: v1, v1.1 and v2 (milestones 1 to 14) are done; 0.2.0 was released on 2026-11-05 (see [Milestones](#milestones)). Available providers: Google Drive (with shared drives), OneDrive, Nextcloud, WebDAV, S3 storage (tried with real accounts or servers). In *preview* (not yet tried with a real account): Dropbox, pCloud, and Proton Drive (feature outside `default`). `local` for tests.
 
 ## Instructions for Claude Code
 
