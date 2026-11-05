@@ -2,12 +2,13 @@
 # Puts the homepage (website/) into the site published on GitHub Pages,
 # next to the Flatpak repository, with the site's address filled in.
 # Usage: scripts/site-page.sh <base-url> <site>
-# Without arguments: a local preview in target/site, to open in a browser.
+# Without arguments: a local preview in target/site, to open in a browser
+# (its install button and command point to the real site).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -eq 0 ]; then
-    set -- "file://$root/target/site" "$root/target/site"
+    set -- https://felixilgatto.github.io/nuage "$root/target/site"
     echo "preview: open $root/target/site/index.html"
 elif [ $# -ne 2 ]; then
     echo "usage: $0 [<base-url> <site>]" >&2

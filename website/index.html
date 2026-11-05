@@ -47,6 +47,11 @@
     font-weight: 700; text-decoration: none; padding: .75rem 1.5rem; border-radius: 999px; }
   .button:hover { filter: brightness(1.08); }
   .small { color: var(--muted); font-size: .9rem; }
+  .command { display: flex; gap: .5rem; align-items: stretch; }
+  .command pre { flex: 1; min-width: 0; }
+  .copy { font: inherit; font-size: .9rem; font-weight: 700; color: var(--fg); background: var(--code);
+    border: 1px solid var(--line); border-radius: 10px; padding: 0 1rem; cursor: pointer; }
+  .copy:hover { border-color: var(--accent); }
 
   .shot { margin: 1rem 0 3.5rem; text-align: center; }
   .shot img { border-radius: 12px; }
@@ -79,10 +84,13 @@
       <p class="lead">Nuage puts your cloud storage in a regular folder. Open it in
         Files, work on your documents as usual: Nuage keeps them in sync.</p>
       <div class="install">
-        <a class="button" href="nuage.flatpakref">Install Nuage</a>
+        <a class="button" href="@BASE@/nuage.flatpakref">Install Nuage</a>
         <span class="small">Opens in Software. Free and open source.</span>
       </div>
-      <pre><code>flatpak install --user @BASE@/nuage.flatpakref</code></pre>
+      <div class="command">
+        <pre><code id="command">flatpak install --user @BASE@/nuage.flatpakref</code></pre>
+        <button type="button" class="copy" data-copy="command" aria-label="Copy the command">Copy</button>
+      </div>
     </div>
     <div class="mark"><img src="nuage-mark.svg" alt=""></div>
   </header>
@@ -139,5 +147,21 @@
     <p>Nuage is MIT-licensed. It uses <a href="https://rclone.org">rclone</a>. This site sets no cookies.</p>
   </footer>
 </main>
+<script>
+  for (const button of document.querySelectorAll("button[data-copy]")) {
+    button.addEventListener("click", async () => {
+      const text = document.getElementById(button.dataset.copy).textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = "Copied";
+      } catch {
+        // No clipboard access: select the text, ready for Ctrl+C.
+        getSelection().selectAllChildren(document.getElementById(button.dataset.copy));
+        button.textContent = "Ctrl+C";
+      }
+      setTimeout(() => { button.textContent = "Copy"; }, 2000);
+    });
+  }
+</script>
 </body>
 </html>
