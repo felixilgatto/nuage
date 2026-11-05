@@ -358,6 +358,16 @@ then `PATH`; log in the user data folder) and never stops it on close.
   the user's exclusions, removal (with the daemon's `busy` answer confirmed
   before `force`). Not tabs in Preferences, which would overflow with many
   accounts.
+- Updates of Nuage itself (Flatpak only; `Backend::watch_updates`): the
+  portal's `UpdateMonitor`, which checks the origin remote every 30 min.
+  `UpdateAvailable` with a remote commit newer than the running one offers
+  **Update** (a toast that stays and a notification), which calls
+  `UpdateMonitor.Update`: the desktop asks once whether Nuage may update
+  itself, and the portal refuses an update that adds permissions (the user
+  is then sent to Software). Once the local commit differs from the running
+  one (installed by the button, Software or `flatpak update`), **Restart**
+  stops the daemon and starts the new version with `Spawn` (`latest`).
+  The CLI has no equivalent: `flatpak update` is the command-line way.
 - Reconnecting (`ui/reconnect.rs`): `AccountReconnect` opens the sign-in
   in the browser, a dialog waits for `SignInWait` (Cancel, Copy link).
 - Notifications (`gio::Notification`, the portal in the Flatpak) for
