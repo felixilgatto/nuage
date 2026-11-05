@@ -141,6 +141,16 @@ which installed copies update.
 3. Push the tag: `git tag v<version> && git push origin v<version>`. The
    same workflow then publishes.
 
+The homepage (<https://felixilgatto.github.io/nuage/>) is `website/index.html`;
+`scripts/site-page.sh` puts it next to the Flatpak repository. A release
+publishes it. To publish a change to it without a release: Actions →
+**Site** → **Run workflow** on `main`, with *publish* ticked (without it, the
+run only builds the site). It reuses the latest release's repository
+unchanged (`nuage-site.tar`, attached to the release), so installed copies
+see no update. To look at it locally:
+`scripts/site-page.sh "$PWD/target/site" target/site` then open
+`target/site/index.html`.
+
 `scripts/check-release.sh` (run by CI) checks that `Cargo.toml`, the
 metainfo and the changelog agree; the release also checks the tag.
 

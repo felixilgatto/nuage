@@ -1,0 +1,73 @@
+name: Site
+
+# Republishes the homepage (website/) on GitHub Pages without a release.
+# The Flatpak repository next to it is the latest release's, byte for byte
+# (its nuage-site.tar), so installed copies see no update.
+#
+# Actions → Site → Run workflow: builds the site into the run's artifacts.
+# Tick "publish", on main, to put it online.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Put the site online
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PAGES_URL: https://felixilgatto.github.io/nuage
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: The site of the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --json tagName -q .tagName)
+          mkdir site
+          if gh release download "$tag" -p nuage-site.tar -D "$RUNNER_TEMP"; then
+            tar -C site -xf "$RUNNER_TEMP/nuage-site.tar"
+          else
+            # Releases before 0.2.1 have no nuage-site.tar: take the site
+            # from the release's run (its artifacts last 90 days).
+            run=$(gh run list -w release.yml -b "$tag" -s success -L 1 --json databaseId -q '.[0].databaseId')
+            [ -n "$run" ] || { echo "::error::no site for $tag"; exit 1; }
+            gh run download "$run" -n flatpak-site -D site
+          fi
+          for f in repo/config repo/summary repo/summary.sig nuage.flatpakref nuage.flatpakrepo nuage.gpg; do
+            [ -e "site/$f" ] || { echo "::error::site/$f is missing"; exit 1; }
+          done
+          echo "Flatpak repository of $tag"
+      - name: The page from website/
+        run: scripts/site-page.sh "$PAGES_URL" site
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: |
+            site/
+            !site/repo/
+      - if: inputs.publish && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    if: inputs.publish && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

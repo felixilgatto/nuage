@@ -33,6 +33,8 @@ The specification, principles and milestones are in
   test with explicit `-p` lists.
 - Proton Drive is outside the default features:
   `--features nuage-providers/protondrive`.
+- The homepage on GitHub Pages is `website/index.html` (see "Releases" in
+  [docs/BUILDING.md](docs/BUILDING.md)).
 - Packages: `scripts/build-native.sh` (tarball, `.deb`, `.rpm`);
   Flatpak manifest in `build-aux/flatpak/`.
 

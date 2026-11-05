@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nuage: your cloud files, simply on Linux</title>
+<meta name="description" content="Nuage puts your cloud storage in a regular folder on Linux: Google Drive, OneDrive, Nextcloud, WebDAV, S3 and more.">
+<meta property="og:title" content="Nuage">
+<meta property="og:description" content="Your cloud files, simply on Linux.">
+<meta property="og:image" content="@BASE@/social-preview.png">
+<meta property="og:url" content="@BASE@/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="nuage-mark.svg" type="image/svg+xml">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fff7f0; --surface: #fde5dc; --fg: #5b4636; --muted: #7d6656;
+    --accent: #c2553f; --accent-fg: #fff; --code: #f6e4d8; --line: #efd6c6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #221b17; --surface: #33281f; --fg: #f3e3d6; --muted: #c4ae9e;
+      --accent: #ff9e8a; --accent-fg: #2a1a14; --code: #2e241d; --line: #43352b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.6 ui-rounded, "Nunito", "Cantarell", system-ui, sans-serif; }
+  main { max-width: 64rem; margin: 0 auto; padding: 0 1rem; }
+  a { color: var(--accent); }
+  img { max-width: 100%; height: auto; }
+  code, pre { font-family: ui-monospace, "Source Code Pro", monospace; font-size: .88em; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+    padding: .7rem 1rem; overflow-x: auto; margin: 0; }
+
+  header.hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2rem; align-items: center;
+    padding: 4rem 0 2.5rem; }
+  .hero h1 { font-size: clamp(2.8rem, 8vw, 4.5rem); line-height: 1; margin: 0 0 .6rem;
+    letter-spacing: -.02em; }
+  .hero .tagline { font-size: clamp(1.25rem, 3.2vw, 1.6rem); font-weight: 700; margin: 0 0 .5rem; }
+  .hero .lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 34rem; }
+  .mark { width: clamp(9rem, 22vw, 15rem); aspect-ratio: 1; border-radius: 50%;
+    background: var(--surface); display: grid; place-items: center; }
+  .mark img { width: 72%; }
+  .install { display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; align-items: center; margin-bottom: 1rem; }
+  .button { display: inline-block; background: var(--accent); color: var(--accent-fg);
+    font-weight: 700; text-decoration: none; padding: .75rem 1.5rem; border-radius: 999px; }
+  .button:hover { filter: brightness(1.08); }
+  .small { color: var(--muted); font-size: .9rem; }
+
+  .shot { margin: 1rem 0 3.5rem; text-align: center; }
+  .shot img { border-radius: 12px; }
+
+  section { padding: 0 0 3rem; }
+  h2 { font-size: 1.5rem; margin: 0 0 1rem; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1rem;
+    list-style: none; padding: 0; margin: 0; }
+  .features li { background: var(--surface); border-radius: 14px; padding: 1rem 1.2rem; }
+  .features strong { display: block; }
+  .providers { display: flex; flex-wrap: wrap; gap: .5rem; list-style: none; padding: 0; margin: 0 0 .6rem; }
+  .providers li { border: 1px solid var(--line); border-radius: 999px; padding: .25rem .85rem; }
+  .providers li.preview { color: var(--muted); border-style: dashed; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 2rem; }
+  footer { border-top: 1px solid var(--line); padding: 1.5rem 0 2.5rem; color: var(--muted); font-size: .9rem; }
+  footer a { margin-right: 1rem; }
+
+  @media (max-width: 40rem) {
+    header.hero { grid-template-columns: minmax(0, 1fr); padding-top: 2.5rem; }
+    .mark { grid-row: 1; width: 7rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <div>
+      <h1>nuage</h1>
+      <p class="tagline">Your cloud files, simply on Linux.</p>
+      <p class="lead">Nuage puts your cloud storage in a regular folder. Open it in
+        Files, work on your documents as usual: Nuage keeps them in sync.</p>
+      <div class="install">
+        <a class="button" href="nuage.flatpakref">Install Nuage</a>
+        <span class="small">Opens in Software. Free and open source.</span>
+      </div>
+      <pre><code>flatpak install --user @BASE@/nuage.flatpakref</code></pre>
+    </div>
+    <div class="mark"><img src="nuage-mark.svg" alt=""></div>
+  </header>
+
+  <div class="shot">
+    <img src="browser.png" width="1010" height="690"
+         alt="The Nuage window: a Documents account, with folders kept offline or left out of sync.">
+  </div>
+
+  <section>
+    <h2>What it does</h2>
+    <ul class="features">
+      <li><strong>A folder per account</strong> Each account appears as a folder you choose, visible in Files.</li>
+      <li><strong>Always up to date</strong> An icon in the top bar tells you whether everything is synced.</li>
+      <li><strong>Offline when you need it</strong> Keep files and folders on your computer, like a password database.</li>
+      <li><strong>Your choice</strong> Leave folders out of sync, pause and resume uploads, see the space left.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Your providers</h2>
+    <ul class="providers">
+      <li>Google Drive</li><li>OneDrive</li><li>Nextcloud</li><li>WebDAV</li>
+      <li>S3 (Amazon, Cloudflare R2, Backblaze B2, MinIO…)</li>
+      <li class="preview">Dropbox (preview)</li><li class="preview">pCloud (preview)</li>
+      <li class="preview">Proton Drive (preview)</li>
+    </ul>
+    <p class="small">Preview providers have not been tried with a real account yet.
+      <a href="https://github.com/felixilgatto/nuage/blob/main/docs/PROVIDERS.md">Details</a>.</p>
+  </section>
+
+  <section class="two">
+    <div>
+      <h2>Get started</h2>
+      <p>Open Nuage, pick a provider, sign in, choose the folder. That's it: Nuage then
+        lives in the top bar, and closing the window does not stop the sync.</p>
+      <p>Updates come with <code>flatpak update</code> and in Software, like any other app.
+        You need Flatpak (on Ubuntu: <code>sudo apt install flatpak</code>).</p>
+    </div>
+    <div>
+      <h2>On a server too</h2>
+      <p>No screen needed: <code>.deb</code>, <code>.rpm</code> and a tarball for
+        x86-64 and ARM64, driven from the command line.
+        <a href="https://github.com/felixilgatto/nuage/blob/main/docs/SERVER.md">How</a>.</p>
+      <p>Everything the app does can be done with the <code>nuage</code> command.
+        <a href="https://github.com/felixilgatto/nuage/blob/main/docs/CLI.md">All commands</a>.</p>
+    </div>
+  </section>
+  <footer>
+    <a href="https://github.com/felixilgatto/nuage/blob/main/docs/INSTALL.md">Install and uninstall</a>
+    <a href="https://github.com/felixilgatto/nuage/blob/main/docs/TROUBLESHOOTING.md">Help</a>
+    <a href="https://github.com/felixilgatto/nuage/releases">Releases</a>
+    <a href="https://github.com/felixilgatto/nuage">Source code</a>
+    <p>Nuage is MIT-licensed. It uses <a href="https://rclone.org">rclone</a>. This site sets no cookies.</p>
+  </footer>
+</main>
+</body>
+</html>

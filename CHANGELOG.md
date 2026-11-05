@@ -4,6 +4,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- A homepage: <https://felixilgatto.github.io/nuage/>.
+
 ## [0.2.0] - 2026-11-05
 
 - Install on the desktop from Nuage's own Flatpak repository

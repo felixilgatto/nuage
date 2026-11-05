@@ -4,8 +4,9 @@
 #   <site>/repo/             the signed repository (`flatpak update` reads it)
 #   <site>/nuage.flatpakref  one-click install, also adds the repository
 #   <site>/nuage.flatpakrepo the repository alone
-#   <site>/index.html        how to install
+#   <site>/index.html        the homepage, from website/ (scripts/site-page.sh)
 #   <bundles>/nuage-<arch>.flatpak  bundles that update from the repository
+#   <bundles>/nuage-site.tar  all of <site>, attached to the release
 # Usage: scripts/flatpak-repo.sh <gpg-key-id> <base-url> <site> <bundles> <repo>...
 # GNUPGHOME selects the keyring holding the private key.
 set -euo pipefail
@@ -32,7 +33,7 @@ for src in "$@"; do
     done
 done
 flatpak build-update-repo --title=Nuage --default-branch="$branch" \
-    --homepage=https://github.com/felixilgatto/nuage \
+    --homepage="$base/" \
     --gpg-sign="$key" "${gpg_home[@]}" --generate-static-deltas --prune "$site/repo"
 
 cat > "$site/nuage.flatpakref" <<EOF
@@ -44,7 +45,7 @@ Url=$base/repo/
 SuggestRemoteName=nuage
 RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
 IsRuntime=false
-Homepage=https://github.com/felixilgatto/nuage
+Homepage=$base/
 GPGKey=$pubkey
 EOF
 
@@ -52,7 +53,7 @@ cat > "$site/nuage.flatpakrepo" <<EOF
 [Flatpak Repo]
 Title=Nuage
 Url=$base/repo/
-Homepage=https://github.com/felixilgatto/nuage
+Homepage=$base/
 Comment=Nuage: your cloud storage as a regular folder
 GPGKey=$pubkey
 EOF
@@ -63,36 +64,9 @@ for arch in $(ostree refs --repo="$site/repo" | sed -n "s|^app/$app/\([^/]*\)/$b
         --gpg-keys="$site/nuage.gpg" "$site/repo" "$bundles/nuage-$arch.flatpak" "$app" "$branch"
 done
 
-cat > "$site/index.html" <<EOF
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Install Nuage</title>
-<style>
-  :root { color-scheme: light dark; --bg: #fafafa; --fg: #1c1c1c; --muted: #5c5c5c; --code: #ececec; --accent: #1c5fb8; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #1d1d20; --fg: #ececec; --muted: #a8a8a8; --code: #2c2c30; --accent: #8fb8f0; } }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, sans-serif; }
-  main { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1rem; }
-  h1 { margin-top: 0; } a { color: var(--accent); } p.lead { color: var(--muted); }
-  pre { background: var(--code); padding: .75rem 1rem; border-radius: 8px; overflow-x: auto; }
-  code { font-family: ui-monospace, monospace; font-size: .92em; }
-</style>
-</head>
-<body>
-<main>
-<h1>Install Nuage</h1>
-<p class="lead">Your cloud storage as a regular folder on Linux.</p>
-<p>You need Flatpak (on Ubuntu: <code>sudo apt install flatpak</code>). Then open
-<a href="nuage.flatpakref">nuage.flatpakref</a> with Software, or run:</p>
-<pre><code>flatpak install --user $base/nuage.flatpakref</code></pre>
-<p>Updates come with <code>flatpak update</code> and in Software, like any other app.
-The GNOME runtime comes from Flathub, added on the way if needed.</p>
-<p>Servers, other packages, source: <a href="https://github.com/felixilgatto/nuage">github.com/felixilgatto/nuage</a>.</p>
-</main>
-</body>
-</html>
-EOF
+"$(dirname "$0")/site-page.sh" "$base" "$site"
+# The whole site, kept with the release: the Site workflow republishes the
+# page with this repository, unchanged.
+tar -C "$site" -cf "$bundles/nuage-site.tar" .
 echo "site in $site, bundles in $bundles:"
 ls -l "$bundles"
