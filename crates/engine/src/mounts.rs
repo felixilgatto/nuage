@@ -2,6 +2,7 @@
 //! cleanup of mounts left behind by a crashed daemon.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use nuage_core::{
     Account, AccountId, Error, Event, ExclusionRule, ExclusionSet, Result, VfsOptions,
@@ -356,6 +357,8 @@ impl Inner {
                     mounted: true,
                 });
                 tracing::info!(account = %account.display_name, at = %plan.user_mount_point.display(), "mounted");
+                // rclone puts back the uploads left in its cache.
+                self.watch_uploads();
             }
             Err(e) => runtime.mount_error = Some(e.to_string()),
         }
@@ -432,6 +435,7 @@ impl Inner {
                         store: Some(self.paths.pin_store(&account.id)),
                         pins: self.pin_view(&account.id),
                         offline: !hidden_mounted,
+                        writes: Arc::clone(&self.writes),
                         ..nuage_fs::MountConfig::default()
                     };
                     tokio::task::spawn_blocking(move || nuage_fs::mount(&backing, &user, &config))

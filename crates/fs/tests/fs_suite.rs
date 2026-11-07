@@ -226,6 +226,141 @@ fn read_write() {
     assert!(file.is_ok());
 }
 
+/// Replaces a backing file with content of the same size, as a remote
+/// change seen by rclone does, with a later modification time.
+fn change_behind(path: &Path, content: &str) {
+    let before = fs::metadata(path).unwrap().modified().unwrap();
+    fs::write(path, content).unwrap();
+    File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(before + Duration::from_secs(10))
+        .unwrap();
+}
+
+#[test]
+fn changes_behind_the_relay_are_seen() {
+    let f = fixture!();
+    fs::write(f.b("doc.txt"), "version one").unwrap();
+    // Read twice: the second open may keep the cached pages.
+    for _ in 0..2 {
+        assert_eq!(fs::read_to_string(f.m("doc.txt")).unwrap(), "version one");
+    }
+    change_behind(&f.b("doc.txt"), "version two");
+    assert_eq!(fs::read_to_string(f.m("doc.txt")).unwrap(), "version two");
+
+    // Written through the relay, then changed behind it.
+    fs::write(f.m("doc.txt"), "version 3!!").unwrap();
+    assert_eq!(fs::read_to_string(f.m("doc.txt")).unwrap(), "version 3!!");
+    change_behind(&f.b("doc.txt"), "version 4!!");
+    assert_eq!(fs::read_to_string(f.m("doc.txt")).unwrap(), "version 4!!");
+
+    // An open file sees the change once its attributes expire.
+    let open = File::open(f.m("doc.txt")).unwrap();
+    let mut buf = [0u8; 11];
+    open.read_exact_at(&mut buf, 0).unwrap();
+    assert_eq!(&buf, b"version 4!!");
+    change_behind(&f.b("doc.txt"), "version 5!!");
+    std::thread::sleep(Duration::from_millis(1100));
+    let _ = fs::metadata(f.m("doc.txt")).unwrap();
+    open.read_exact_at(&mut buf, 0).unwrap();
+    assert_eq!(&buf, b"version 5!!");
+}
+
+/// Replaces a file with content of the same size and puts its modification
+/// time back, as an encrypted container or a copy that keeps timestamps
+/// does.
+fn change_in_place(path: &Path, content: &str) {
+    let before = fs::metadata(path).unwrap().modified().unwrap();
+    fs::write(path, content).unwrap();
+    File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(before)
+        .unwrap();
+}
+
+#[test]
+fn changes_keeping_size_and_time_are_seen() {
+    let f = fixture!(with_exclusions(&["*.tmp"]));
+    // On the hidden mount, then in the local-only folder.
+    fs::write(f.b("vault.hc"), "version one").unwrap();
+    fs::write(f.m("vault.tmp"), "version one").unwrap();
+    for (name, behind) in [
+        ("vault.hc", f.b("vault.hc")),
+        ("vault.tmp", f.l("vault.tmp")),
+    ] {
+        for _ in 0..2 {
+            assert_eq!(fs::read_to_string(f.m(name)).unwrap(), "version one");
+        }
+        change_in_place(&behind, "version two");
+        assert_eq!(
+            fs::read_to_string(f.m(name)).unwrap(),
+            "version two",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn missing_names_are_remembered_briefly() {
+    let f = fixture!();
+    assert!(!f.m("later.txt").exists());
+    // Created through the mount: seen at once.
+    fs::write(f.m("later.txt"), "x").unwrap();
+    assert!(f.m("later.txt").exists());
+
+    assert!(!f.m("behind.txt").exists());
+    // Created behind the mount: seen once the answer expires.
+    fs::write(f.b("behind.txt"), "x").unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(f.m("behind.txt").exists());
+}
+
+#[test]
+fn writes_to_the_cloud_are_counted() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let writes = Arc::new(AtomicU64::new(0));
+    let f = fixture!(MountConfig {
+        writes: Arc::clone(&writes),
+        ..with_exclusions(&["*.tmp"])
+    });
+    let count = || writes.load(Ordering::Relaxed);
+    // The kernel sends the close after `close(2)` returns.
+    let wait_for = |n: u64| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while count() < n && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(count(), n);
+    };
+
+    fs::write(f.b("remote.txt"), "remote").unwrap();
+    fs::read(f.m("remote.txt")).unwrap();
+    fs::write(f.m("kept.tmp"), "local only").unwrap();
+    File::create(f.m("kept.tmp")).unwrap();
+    // Reads and excluded files are not counted: the next file is the first,
+    // and a late count would break an exact count below.
+    fs::write(f.m("new.txt"), "new").unwrap();
+    wait_for(1);
+    File::create(f.m("empty.txt")).unwrap();
+    wait_for(2);
+    OpenOptions::new()
+        .write(true)
+        .open(f.m("remote.txt"))
+        .unwrap()
+        .set_len(2)
+        .unwrap();
+    wait_for(3);
+    // Saved under a name that is synchronised.
+    fs::rename(f.m("kept.tmp"), f.m("kept.txt")).unwrap();
+    wait_for(4);
+}
+
 #[test]
 fn large_file_and_seeks() {
     let f = fixture!();

@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::relay::Version;
+
 pub const ROOT: u64 = 1;
 
 #[derive(Debug)]
@@ -16,6 +18,9 @@ struct Node {
     /// file was deleted or replaced while the kernel still knows the inode.
     path: Option<PathBuf>,
     lookups: u64,
+    /// What the kernel's cached pages of the file were read from or
+    /// written as (see [`Version`]).
+    version: Option<Version>,
 }
 
 /// `old`, which is `from` or below it, moved to `to`.
@@ -44,6 +49,7 @@ impl Default for Inodes {
             Node {
                 path: Some(PathBuf::new()),
                 lookups: 1,
+                version: None,
             },
         );
         let mut by_path = HashMap::new();
@@ -60,6 +66,18 @@ impl Inodes {
     /// Path of an inode, if it still has one.
     pub fn path(&self, ino: u64) -> Option<PathBuf> {
         self.by_ino.get(&ino)?.path.clone()
+    }
+
+    /// The state of the file the last time it was opened or closed.
+    pub fn version(&self, ino: u64) -> Option<Version> {
+        self.by_ino.get(&ino)?.version
+    }
+
+    /// Records the state of a file just opened or closed.
+    pub fn set_version(&mut self, ino: u64, version: Option<Version>) {
+        if let Some(node) = self.by_ino.get_mut(&ino) {
+            node.version = version;
+        }
     }
 
     /// Inode of `path` if the kernel knows it, without counting a lookup.
@@ -82,6 +100,7 @@ impl Inodes {
             Node {
                 path: Some(path.to_owned()),
                 lookups: 1,
+                version: None,
             },
         );
         self.by_path.insert(path.to_owned(), ino);
@@ -215,6 +234,23 @@ mod tests {
         t.exchanged(Path::new("a"), Path::new("b"));
         assert_eq!(t.path(a), Some(PathBuf::from("b")));
         assert_eq!(t.path(b), Some(PathBuf::from("a/x")));
+    }
+
+    #[test]
+    fn versions_follow_the_inode() {
+        let mut t = Inodes::default();
+        let a = t.lookup(Path::new("a"));
+        let v = Version::for_test(3);
+        assert_eq!(t.version(a), None);
+        t.set_version(a, Some(v));
+        t.renamed(Path::new("a"), Path::new("b"));
+        assert_eq!(t.version(a), Some(v));
+        // A new file at the old name starts without one.
+        let again = t.lookup(Path::new("a"));
+        assert_eq!(t.version(again), None);
+        // Forgotten with the inode.
+        t.forget(a, 1);
+        assert_eq!(t.version(a), None);
     }
 
     #[test]

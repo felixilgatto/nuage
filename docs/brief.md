@@ -290,7 +290,7 @@ Field and option names change from one rclone version to another: check them on 
 
 ### What "up to date" means
 
-In mount mode, nothing is copied in advance. **"Up to date" = no local write waiting to be uploaded.** Changes made elsewhere appear at the next refresh (backend polling by rclone) or via "Refresh".
+In mount mode, nothing is copied in advance. **"Up to date" = no local write waiting to be uploaded.** Changes made elsewhere appear at the next refresh (backend polling by rclone) or via "Refresh". Providers that report changes (Drive, OneDrive, Dropbox) poll every minute and keep listings for an hour (`DirCacheTime`), so folders open without a request; the hour bounds a missed change.
 
 ## Features
 
@@ -361,7 +361,7 @@ In mount mode, nothing is copied in advance. **"Up to date" = no local write wai
 
 **Pause**: suspends **uploads**, per account or for all. The folder stays mounted and usable; writes pile up in the cache and are sent on resume. The pause survives a daemon restart.
 
-Mechanism (verified on rclone 1.75.2): each account is mounted with a very long `WriteBack` (e.g. `8760h`), so rclone sends nothing on its own. When the account is not paused, `UploadControl` polls `vfs/queue` every 1 to 2 seconds and releases each new item with `vfs/queue-set-expiry` (`expiry: -1e9`). When paused, it releases nothing. The pause state is in Nuage's TOML config. Pending writes survive an rclone shutdown and are queued again on remount. `core/bwlimit` is ruled out: it is global and slows down without ever suspending.
+Mechanism (verified on rclone 1.75.2): each account is mounted with a very long `WriteBack` (e.g. `8760h`), so rclone sends nothing on its own. When the account is not paused, `UploadControl` polls `vfs/queue` every second while uploads may be going on (after a file is written through the user's folder, a mount or a resume, and while the queue is not empty), every 20 seconds otherwise, and releases each new item with `vfs/queue-set-expiry` (`expiry: -1e9`). When paused, it releases nothing. The pause state is in Nuage's TOML config. Pending writes survive an rclone shutdown and are queued again on remount. `core/bwlimit` is ruled out: it is global and slows down without ever suspending.
 
 **Quota** per account: used / total / free / trash, with a percentage. Fields missing if the backend does not provide them.
 
