@@ -691,6 +691,7 @@ impl Inner {
         }
         if online {
             tracing::info!(account = %name, "back online");
+            self.watch_uploads();
             if runtime.mounted.is_none()
                 && let Err(e) = self.mount_locked(&mut st, i).await
             {

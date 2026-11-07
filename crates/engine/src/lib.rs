@@ -105,6 +105,10 @@ pub(crate) struct Inner {
     /// ready, or wait to be unlocked).
     keyring_wait: std::sync::Mutex<Option<(String, Instant)>>,
     pins: pins::Pins,
+    /// Files written to the cloud through `nuage-fs` and closed (shared by
+    /// every mount).
+    writes: Arc<std::sync::atomic::AtomicU64>,
+    uploads: std::sync::Mutex<uploads::Watch>,
 }
 
 #[derive(Debug)]
@@ -221,6 +225,8 @@ impl Engine {
                 config_encrypted: std::sync::atomic::AtomicBool::new(false),
                 keyring_wait: std::sync::Mutex::new(None),
                 pins,
+                writes: Arc::default(),
+                uploads: std::sync::Mutex::default(),
             }),
         })
     }
@@ -595,11 +601,21 @@ impl Inner {
             tick.tick().await;
             n += 1;
             self.check_rcd().await;
-            self.release_uploads().await;
+            // Each costs a call to rclone per account: every second (the
+            // status every two) while uploads may be going on, otherwise
+            // at the idle interval. The rest of the status (mount errors,
+            // keyring, offline files) is published every two seconds.
+            let busy = self.uploads_busy();
+            let idle_due = self.idle_check_due();
+            if busy || idle_due {
+                self.release_uploads().await;
+            }
             self.expire_sign_in().await;
             self.pins_tick().await;
-            if n % 2 == 0 {
+            if (busy && n % 2 == 0) || idle_due {
                 self.poll_status().await;
+            } else if n % 2 == 0 {
+                self.refresh_status().await;
             }
         }
     }

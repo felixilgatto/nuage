@@ -55,6 +55,10 @@ impl Provider for Dropbox {
         VfsOptions {
             // Dropbox reports changes (longpoll): one minute, like Drive.
             poll_interval_secs: Some(60),
+            // Changes are reported, so listings stay valid much longer
+            // than rclone's 5 minutes: folders open without a request.
+            // An hour bounds how long a missed change can go unseen.
+            dir_cache_time_secs: Some(3600),
             ..VfsOptions::default()
         }
     }

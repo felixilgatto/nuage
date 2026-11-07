@@ -14,9 +14,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fuser::{
     AccessFlags, BsdFileFlags, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags,
-    Generation, INodeNo, LockOwner, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
-    Request, TimeOrNow, WriteFlags,
+    Generation, INodeNo, InitFlags, KernelConfig, LockOwner, OpenFlags, RenameFlags, ReplyAttr,
+    ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs,
+    ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 
 use nuage_core::ExclusionSet;
@@ -29,6 +29,25 @@ use crate::pins::{Listed, PinView};
 /// backing folder changes behind our back (remote changes seen by rclone).
 const TTL: Duration = Duration::from_secs(1);
 
+/// A negative lookup answer: only the inode (0) matters.
+const NO_ENTRY: FileAttr = FileAttr {
+    ino: INodeNo(0),
+    size: 0,
+    blocks: 0,
+    atime: UNIX_EPOCH,
+    mtime: UNIX_EPOCH,
+    ctime: UNIX_EPOCH,
+    crtime: UNIX_EPOCH,
+    kind: FileType::RegularFile,
+    perm: 0,
+    nlink: 0,
+    uid: 0,
+    gid: 0,
+    rdev: 0,
+    blksize: 4096,
+    flags: 0,
+};
+
 /// Upper bound of a single read reply.
 const MAX_READ: u32 = 1 << 20;
 
@@ -40,6 +59,8 @@ struct OpenFile {
     ino: u64,
     /// `open(2)` flags, to reopen the file.
     flags: i32,
+    /// Something was written through this handle.
+    written: std::sync::atomic::AtomicBool,
 }
 
 impl OpenFile {
@@ -49,6 +70,7 @@ impl OpenFile {
             ino,
             // Reopening must not truncate the file again.
             flags: flags & !libc::O_TRUNC,
+            written: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -98,13 +120,61 @@ struct DirItem {
 
 /// Where an item lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
+pub(crate) enum Place {
     /// The hidden rclone mount.
     Backing,
     /// The local-only folder (excluded items).
     Local,
     /// The pin store (pinned items, v1.1).
     Store,
+}
+
+/// A file's state when it was last opened or closed.
+///
+/// Opening a file normally makes the kernel drop the pages it cached for
+/// it: the file may have changed behind our back (a file command, the pin
+/// sync replacing a copy). The kernel keeps them only when the file is
+/// still in the state it had when they were cached.
+///
+/// Only for files on a local disk (the local-only folder, the pin store),
+/// whose inode and change time move with every change. rclone reports the
+/// modification time as change time: a remote change that keeps the size
+/// and the modification time (an encrypted container, a copy that keeps
+/// timestamps) would go unseen, so files on the hidden mount are always
+/// read again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Version {
+    place: Place,
+    ino: u64,
+    size: u64,
+    mtime: SystemTime,
+    ctime: (i64, i64),
+}
+
+impl Version {
+    fn of(place: Place, meta: &fs::Metadata) -> Option<Self> {
+        if place == Place::Backing {
+            return None;
+        }
+        Some(Self {
+            place,
+            ino: meta.ino(),
+            size: meta.size(),
+            mtime: meta.modified().ok()?,
+            ctime: (meta.ctime(), meta.ctime_nsec()),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(size: u64) -> Self {
+        Self {
+            place: Place::Store,
+            ino: 1,
+            size,
+            mtime: UNIX_EPOCH,
+            ctime: (0, 0),
+        }
+    }
 }
 
 /// The relay filesystem over `backing`.
@@ -121,6 +191,8 @@ pub struct RelayFs {
     handles: Mutex<HashMap<u64, Arc<Handle>>>,
     next_fh: AtomicU64,
     gate: Arc<Gate>,
+    /// See [`MountConfig::writes`](crate::MountConfig::writes).
+    writes: Arc<AtomicU64>,
 }
 
 fn errno(e: io::Error) -> Errno {
@@ -208,10 +280,10 @@ pub(crate) fn apply_exclusions(
     local: Option<&Path>,
     backing: &Path,
     exclusions: ExclusionSet,
-) {
+) -> usize {
     *current.write().expect("exclusions lock") = exclusions;
     let Some(local) = local else {
-        return;
+        return 0;
     };
     let mut moved = 0;
     let mut stack = vec![PathBuf::new()];
@@ -248,6 +320,7 @@ pub(crate) fn apply_exclusions(
         tracing::info!(files = moved, "files no longer excluded moved to the cloud");
     }
     remove_empty_dirs(local);
+    moved
 }
 
 fn is_excluded(set: &RwLock<ExclusionSet>, rel: &Path) -> bool {
@@ -302,6 +375,7 @@ impl RelayFs {
         store: Option<PathBuf>,
         pins: Arc<RwLock<PinView>>,
         gate: Arc<Gate>,
+        writes: Arc<AtomicU64>,
     ) -> Self {
         Self {
             backing,
@@ -313,6 +387,7 @@ impl RelayFs {
             handles: Mutex::new(HashMap::new()),
             next_fh: AtomicU64::new(1),
             gate,
+            writes,
         }
     }
 
@@ -399,11 +474,51 @@ impl RelayFs {
     /// Where `rel` lives, as a full path; waits for the backing folder if
     /// that is where.
     fn path_of(&self, rel: &Path) -> Result<PathBuf, Errno> {
+        self.located(rel).map(|(_, path)| path)
+    }
+
+    /// Like [`path_of`](Self::path_of), with where that is.
+    fn located(&self, rel: &Path) -> Result<(Place, PathBuf), Errno> {
         let place = self.place(rel, false);
         if place == Place::Backing {
             self.ready()?;
         }
-        Ok(self.root(place).join(rel))
+        Ok((place, self.root(place).join(rel)))
+    }
+
+    /// Counts a file written and closed, for
+    /// [`MountConfig::writes`](crate::MountConfig::writes), if it is now on
+    /// the hidden mount (rclone uploads it).
+    fn count_upload(&self, place: Place) {
+        if place == Place::Backing {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Like [`count_upload`](Self::count_upload), for where `ino` is now.
+    fn count_upload_of(&self, ino: u64) {
+        if let Ok(rel) = self.rel(INodeNo(ino)) {
+            self.count_upload(self.place(&rel, false));
+        }
+    }
+
+    /// Whether the kernel may keep the pages it cached for a file being
+    /// opened: only if the file is on a local disk and unchanged since it
+    /// was last opened or closed (see [`Version`]). Records its state for
+    /// the next open.
+    fn keep_cache(&self, ino: u64, place: Place, file: &File) -> FopenFlags {
+        let now = (place != Place::Backing)
+            .then(|| file.metadata().ok())
+            .flatten()
+            .and_then(|meta| Version::of(place, &meta));
+        let mut inodes = self.inodes();
+        let unchanged = now.is_some() && inodes.version(ino) == now;
+        inodes.set_version(ino, now);
+        if unchanged {
+            FopenFlags::FOPEN_KEEP_CACHE
+        } else {
+            FopenFlags::empty()
+        }
     }
 
     /// Like [`path_of`](Self::path_of), for an item about to be created:
@@ -621,12 +736,25 @@ impl RelayFs {
     fn on_file<T>(
         &self,
         fh: FileHandle,
+        op: impl FnMut(&File) -> io::Result<T>,
+    ) -> Result<T, Errno> {
+        self.on_file_marked(fh, false, op)
+    }
+
+    /// Like [`on_file`](Self::on_file); `written` notes that `op` writes.
+    fn on_file_marked<T>(
+        &self,
+        fh: FileHandle,
+        written: bool,
         mut op: impl FnMut(&File) -> io::Result<T>,
     ) -> Result<T, Errno> {
         let handle = self.file(fh)?;
         let Handle::File(of) = &*handle else {
             unreachable!("checked by file()")
         };
+        if written {
+            of.written.store(true, Ordering::Relaxed);
+        }
         let deadline = Instant::now() + self.gate.timeout();
         loop {
             match op(&of.get()) {
@@ -737,6 +865,11 @@ impl RelayFs {
         }
         if let Some(size) = size {
             with_file(true, &|f| f.set_len(size))?;
+            match open.as_deref() {
+                Some(Handle::File(of)) => of.written.store(true, Ordering::Relaxed),
+                // Truncated by name: opened and closed at once.
+                _ => self.count_upload_of(ino.0),
+            }
         }
         if atime.is_some() || mtime.is_some() {
             let resolve = |t: TimeOrNow| match t {
@@ -770,10 +903,27 @@ impl RelayFs {
 }
 
 impl Filesystem for RelayFs {
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> io::Result<()> {
+        // The kernel drops the cached pages of an open file when a change
+        // of size or modification time shows up.
+        if let Err(missing) = config.add_capabilities(InitFlags::FUSE_AUTO_INVAL_DATA) {
+            tracing::debug!(
+                ?missing,
+                "the kernel does not invalidate cached pages on changes"
+            );
+        }
+        Ok(())
+    }
+
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let result = self.with_backing(|| self.entry(&self.child(parent, name)?));
         match result {
             Ok(attr) => reply.entry(&TTL, &attr, Generation(0)),
+            // Applications look for many files that are not there (`.git`,
+            // `.hidden`, `desktop.ini`…): the kernel remembers the answer
+            // for as long as it keeps attributes (inode 0 means "no such
+            // entry"). Creating the name through this mount forgets it.
+            Err(Errno::ENOENT) => reply.entry(&TTL, &NO_ENTRY, Generation(0)),
             Err(e) => reply.error(e),
         }
     }
@@ -990,6 +1140,7 @@ impl Filesystem for RelayFs {
                 // a temporary file saved under its final name, or the
                 // reverse.
                 self.move_across(&src, &dst, rflags)?;
+                self.count_upload(to_place);
             }
             if from_place == Place::Store {
                 self.hide(&from);
@@ -1036,11 +1187,14 @@ impl Filesystem for RelayFs {
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let result = self.with_backing(|| {
-            let file = open_options(flags.0).open(self.real(ino)?).map_err(errno)?;
-            Ok(self.add_handle(Handle::File(OpenFile::new(file, ino.0, flags.0))))
+            let (place, path) = self.located(&self.rel(ino)?)?;
+            let file = open_options(flags.0).open(path).map_err(errno)?;
+            let keep = self.keep_cache(ino.0, place, &file);
+            let fh = self.add_handle(Handle::File(OpenFile::new(file, ino.0, flags.0)));
+            Ok((fh, keep))
         });
         match result {
-            Ok(fh) => reply.opened(fh, FopenFlags::empty()),
+            Ok((fh, keep)) => reply.opened(fh, keep),
             Err(e) => reply.error(e),
         }
     }
@@ -1088,7 +1242,7 @@ impl Filesystem for RelayFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
-        let result = self.on_file(fh, |file| file.write_all_at(data, offset));
+        let result = self.on_file_marked(fh, true, |file| file.write_all_at(data, offset));
         match result {
             Ok(()) => reply.written(data.len() as u32),
             Err(e) => reply.error(e),
@@ -1124,10 +1278,24 @@ impl Filesystem for RelayFs {
     ) {
         // Dropping the last reference closes the backing file, which is when
         // rclone queues the upload.
-        self.handles
+        let handle = self
+            .handles
             .lock()
             .expect("handle table lock")
             .remove(&fh.0);
+        if let Some(Handle::File(of)) = handle.as_deref()
+            && of.written.load(Ordering::Relaxed)
+        {
+            // The state recorded at open is gone. Not recorded here: the
+            // kernel sends this after `close(2)` returned, and the file may
+            // have changed since what it cached.
+            self.inodes().set_version(of.ino, None);
+            // Where the file is now (it may have been unpinned or included
+            // since it was opened). The backing file is closed when the
+            // last reference to it goes, at the latest when the reply is
+            // sent.
+            self.count_upload_of(of.ino);
+        }
         reply.ok();
     }
 
@@ -1329,13 +1497,17 @@ impl Filesystem for RelayFs {
             // refuses to create without write access. The kernel only sends
             // reads for a read-only handle, so a writable descriptor is safe.
             options.write(true);
-            let file = options.open(self.path_for_new(&rel)?.1).map_err(errno)?;
+            let path = self.path_for_new(&rel)?.1;
+            let file = options.open(path).map_err(errno)?;
             self.unhide(&rel);
             let meta = file.metadata().map_err(errno)?;
             let ino = self.inodes().lookup(&rel);
             // Reopened without O_CREAT/O_EXCL, but writable like here.
             let reopen = (flags & !libc::O_ACCMODE) | libc::O_RDWR;
-            let fh = self.add_handle(Handle::File(OpenFile::new(file, ino, reopen)));
+            let of = OpenFile::new(file, ino, reopen);
+            // Even empty, a new file is uploaded.
+            of.written.store(true, Ordering::Relaxed);
+            let fh = self.add_handle(Handle::File(of));
             Ok((attr(ino, &meta), fh))
         });
         match result {

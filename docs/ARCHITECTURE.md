@@ -113,6 +113,24 @@ data/mounts/<account id>        ← rclone (fuse.rclone), VFS cache, write-back
   mapped to paths relative to the hidden mount, and relays every operation
   to it. It is served by 8 threads, so a slow read (rclone downloading) does
   not block listings or other files.
+- **Page cache**: opening a file on a local disk (the local-only folder,
+  the pin store) keeps the pages the kernel cached for it
+  (`FOPEN_KEEP_CACHE`) only if its inode, size, modification and change
+  times are those recorded at its previous open; a file written through a
+  handle forgets them at close. The state is not recorded at close: the
+  kernel sends it after `close(2)` returned, and the file may have changed
+  since. Files on the hidden mount are always read again: rclone reports
+  the modification time as change time, so a remote change keeping the
+  size and modification time (an encrypted container, a copy keeping
+  timestamps) would go unseen. With `FUSE_AUTO_INVAL_DATA`, files kept open
+  also drop their pages when a change shows up.
+- **Lookups** of a name that does not exist are answered with inode 0 and
+  the 1 s TTL: the kernel remembers them (applications look for `.git`,
+  `.hidden`… all the time). A name created through `nuage-fs` is seen at
+  once, one created behind it within a second, like attributes.
+- `nuage-fs` counts the files written to the cloud and closed
+  (`MountConfig::writes`): the engine then reads the upload queue closely
+  (see Pause).
 - **If rclone dies**, the user's folder stays mounted. The engine closes
   `nuage-fs`'s gate: requests wait (up to 10 s) instead of seeing an empty
   folder. Errors of the dead mount (`ENOTCONN`, `ECONNABORTED`) are retried
@@ -163,9 +181,18 @@ background task ticks every second:
 
 1. restart rcd if it died;
 2. release uploads (see below);
-3. every other tick, poll `vfs/stats` (and `operations/about` every 5
-   minutes) and publish events for what changed (`StatusChanged`,
-   `AccountStateChanged`, `QuotaUpdated`, `CacheFull`, `MountChanged`).
+3. poll `vfs/stats` (and `operations/about` every 5 minutes) and publish
+   events for what changed (`StatusChanged`, `AccountStateChanged`,
+   `QuotaUpdated`, `CacheFull`, `MountChanged`).
+
+Steps 2 and 3 each cost a call to rclone per account, so they run closely
+only while uploads may be going on (`uploads::Watch`): for 10 s after
+`nuage-fs` saw a file written and closed, after a mount, a resume or the
+connection coming back, and as long as an upload queue is not empty.
+Then, uploads are released every tick and the status polled every other
+tick; otherwise, both run every 20 s. In between, the status is still
+published every other tick from the upload state last read, so mount
+errors, the keyring and offline files show up within 2 s.
 
 `nuage status` triggers a poll, so it never shows stale data.
 
@@ -255,8 +282,8 @@ account with local-only files needs `--force`.
 ### Pause
 
 Every mount uses `WriteBack=8760h`, so rclone never uploads by itself.
-Each tick, for mounted accounts that are not paused, the engine reads
-`vfs/queue` and releases (`vfs/queue-set-expiry`, `expiry=-1e9`) items held
+For mounted accounts that are not paused, the engine reads `vfs/queue`
+(each tick while uploads may be going on, see Engine) and releases (`vfs/queue-set-expiry`, `expiry=-1e9`) items held
 by that delay once they are 2 s old. Items with a short delay are rclone's
 own retries and are left alone. Pausing holds again items released but not
 started. The pause flag is in `config.toml`; held writes survive a restart

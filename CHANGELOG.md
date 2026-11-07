@@ -4,6 +4,13 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- Files kept offline open again instantly: Nuage keeps them in memory as
+  long as they have not changed.
+- Folders on Google Drive, OneDrive and Dropbox open faster: Nuage asks
+  the provider for their content less often, and still sees changes made
+  elsewhere within a minute.
+- Nuage wakes up less often when nothing is syncing, which saves battery.
+
 ## [0.2.2] - 2026-11-07
 
 - Nuage says when a new version is available, with an **Update** button,

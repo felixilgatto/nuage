@@ -22,6 +22,8 @@ struct Snapshot {
     quota_due: bool,
     /// The folder is served offline (pinned items, saved listings).
     offline: bool,
+    /// The upload state last read from rclone.
+    cached: Option<DiskCache>,
 }
 
 /// Whether an rclone error says that the provider refused the sign-in
@@ -113,6 +115,18 @@ impl Inner {
     /// Polls rclone, updates the cached report, publishes the changes and
     /// returns the new report.
     pub(crate) async fn poll_status(&self) -> StatusReport {
+        self.status(true).await
+    }
+
+    /// Like [`poll_status`](Self::poll_status), from the upload state last
+    /// read from rclone (read anyway if there is none yet): publishes the
+    /// changes that do not come from rclone (mount errors, keyring, offline
+    /// files) without calling it.
+    pub(crate) async fn refresh_status(&self) -> StatusReport {
+        self.status(false).await
+    }
+
+    async fn status(&self, fetch: bool) -> StatusReport {
         let keyring = self.keyring_overdue();
         let snapshots: Vec<Snapshot> = {
             let st = self.state.lock().await;
@@ -139,6 +153,7 @@ impl Inner {
                         waiting_for_keyring: matches!(keyring, Some(Ok(()))),
                         quota_due: mounted && quota_capable && !quota_fresh,
                         offline: runtime.is_some_and(|rt| rt.offline && rt.fs.is_some()),
+                        cached: runtime.and_then(|rt| rt.disk_cache.clone()),
                     }
                 })
                 .collect()
@@ -155,12 +170,14 @@ impl Inner {
             if s.mounted
                 && let Some(rc) = &rc
             {
-                stats = Some(
-                    rc.vfs_stats(&fs)
+                stats = Some(match (&s.cached, fetch) {
+                    (Some(cache), false) => Ok(cache.clone()),
+                    _ => rc
+                        .vfs_stats(&fs)
                         .await
                         .map(|v| v.disk_cache.unwrap_or_default())
                         .map_err(|e| e.to_string()),
-                );
+                });
                 if s.quota_due {
                     match rc.about(&fs).await {
                         Ok(a) => {

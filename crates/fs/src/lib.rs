@@ -30,6 +30,7 @@ mod relay;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,7 @@ pub struct MountedFs {
     local_only: Option<PathBuf>,
     pins: Arc<RwLock<PinView>>,
     store: Option<PathBuf>,
+    writes: Arc<AtomicU64>,
     /// fuse connection number, to abort the session if it does not end.
     connection: Option<u32>,
 }
@@ -94,6 +96,9 @@ pub struct MountConfig {
     pub pins: PinView,
     /// Mounted while the provider cannot be reached (offline start).
     pub offline: bool,
+    /// Counts the files written to the backing folder and closed: rclone
+    /// queues their upload then. Can be shared by several mounts.
+    pub writes: Arc<AtomicU64>,
 }
 
 impl Default for MountConfig {
@@ -106,6 +111,7 @@ impl Default for MountConfig {
             store: None,
             pins: PinView::default(),
             offline: false,
+            writes: Arc::default(),
         }
     }
 }
@@ -129,6 +135,7 @@ pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Re
         config.store.clone(),
         Arc::clone(&pins),
         Arc::clone(&gate),
+        Arc::clone(&config.writes),
     );
     let mount_point = mount_point.canonicalize()?;
     // Commas separate options: keep them out of the name.
@@ -181,6 +188,7 @@ pub fn mount(backing: &Path, mount_point: &Path, config: &MountConfig) -> io::Re
         local_only: config.local_only.clone(),
         pins,
         store: config.store.clone(),
+        writes: Arc::clone(&config.writes),
     })
 }
 
@@ -227,12 +235,15 @@ impl MountedFs {
     /// Replaces the exclusion rules. Items kept locally that are no longer
     /// excluded are moved to the backing folder. Blocking.
     pub fn set_exclusions(&self, exclusions: ExclusionSet) {
-        relay::apply_exclusions(
+        let moved = relay::apply_exclusions(
             &self.exclusions,
             self.local_only.as_deref(),
             &self.backing,
             exclusions,
         );
+        if moved > 0 {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Unmounts and waits for the serving threads to stop. Blocking.
