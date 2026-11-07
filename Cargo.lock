@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "nuage"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "serde",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-engine"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "nuage-core",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-fs"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "fuser",
  "libc",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-fuse-relay"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "rustix",
  "tempfile",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-gtk"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-channel",
  "gettext-rs",
@@ -1527,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-ipc"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "nuage-core",
  "serde",
@@ -1540,14 +1540,14 @@ dependencies = [
 
 [[package]]
 name = "nuage-providers"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "nuage-core",
 ]
 
 [[package]]
 name = "nuage-rclone"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "nuage-core",
  "reqwest",
@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-tray"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "gettext-rs",
  "ksni",
@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "nuage-ui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ashpd",
  "async-channel",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "nuaged"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
