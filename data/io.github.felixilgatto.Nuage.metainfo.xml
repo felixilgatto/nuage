@@ -89,6 +89,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.2" date="2026-11-07">
+      <description>
+        <ul>
+          <li>Nuage says when a new version is available, with an Update button, then offers to restart once it is installed. No need to wait for Software or to use a terminal.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-11-05">
       <description>
         <ul>

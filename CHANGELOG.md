@@ -4,6 +4,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-07
+
 - Nuage says when a new version is available, with an **Update** button,
   then offers to restart once it is installed. No need to wait for
   Software or to use a terminal.
