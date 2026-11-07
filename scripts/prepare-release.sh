@@ -43,6 +43,7 @@ items = []
 for bullet in re.split(r"^- ", body, flags=re.M)[1:]:
     line = " ".join(bullet.split())
     line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line).replace("`", "")
+    line = re.sub(r"(?<!\w)(\*\*|__|\*|_)(\S(?:.*?\S)?)\1(?!\w)", r"\2", line)
     items.append(html.escape(line, quote=False))
 if not items:
     sys.exit(f"CHANGELOG.md: the {version} section is empty")
