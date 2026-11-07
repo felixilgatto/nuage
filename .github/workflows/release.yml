@@ -162,7 +162,7 @@ jobs:
           name: flatpak-site
           path: site/
       - if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/
 
