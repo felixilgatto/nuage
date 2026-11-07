@@ -229,13 +229,11 @@ impl Ui {
         self.state.borrow_mut().update = UpdateNotice::Installed;
     }
 
-    /// Installing the update failed: say so, and where else to update.
+    /// Installing the update failed: say so, and where else to update. The
+    /// portal's message is technical: it goes to the log only.
     fn update_failed(&self, error: &str) {
         tracing::warn!(error, "cannot install the update");
-        let mut text = gettext("Nuage could not update itself. Update it from Software instead.");
-        if !error.is_empty() {
-            text = format!("{text} ({error})");
-        }
+        let text = gettext("Nuage could not update itself. Update it from Software instead.");
         self.show_update_toast(adw::Toast::builder().title(&text).timeout(0).build());
         let notification = gio::Notification::new(&gettext("Nuage could not update itself"));
         notification.set_body(Some(&gettext("Update it from Software instead.")));
