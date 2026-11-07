@@ -47,7 +47,7 @@ jobs:
           echo "Flatpak repository of $tag"
       - name: The page from website/
         run: scripts/site-page.sh "$PAGES_URL" site
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: site
           path: |
