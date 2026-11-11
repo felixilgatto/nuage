@@ -3,7 +3,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rustix::fs::{FlockOperation, flock};
 
@@ -24,29 +24,29 @@ pub struct Instance {
     _file: std::fs::File,
 }
 
-/// Claims the agent's lock, waiting up to `wait` for a previous agent to
-/// end (a restart after an update). `None`: another agent runs.
-pub fn claim(wait: Duration) -> std::io::Result<Option<Instance>> {
+fn open_lock() -> std::io::Result<std::fs::File> {
     let path = lock_path().ok_or_else(|| std::io::Error::other("no runtime directory"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&path)?;
-    let deadline = Instant::now() + wait;
-    loop {
-        match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => break,
-            Err(rustix::io::Errno::WOULDBLOCK) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(rustix::io::Errno::WOULDBLOCK) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        }
+        .open(&path)
+}
+
+/// Claims the agent's lock. `None`: another agent runs. Never waits: an
+/// agent that waited for the previous one to end would take over when the
+/// user quits (the window's Restart stops the old agent before starting the
+/// new version).
+pub fn claim() -> std::io::Result<Option<Instance>> {
+    let mut file = open_lock()?;
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::WOULDBLOCK) => return Ok(None),
+        Err(e) => return Err(e.into()),
     }
     file.set_len(0)?;
     write!(file, "{}", std::process::id())?;
@@ -54,10 +54,25 @@ pub fn claim(wait: Duration) -> std::io::Result<Option<Instance>> {
     Ok(Some(Instance { _file: file }))
 }
 
-/// Starts the agent, detached; it exits at once if one already runs. Its
-/// output goes to `nuage-tray.log` next to the daemon's log, appended: a
-/// start that finds an agent running must not empty its log.
+/// Whether an agent runs (holds the lock).
+pub fn running() -> bool {
+    open_lock().is_ok_and(
+        |file| match flock(&file, FlockOperation::NonBlockingLockShared) {
+            Ok(()) => {
+                let _ = flock(&file, FlockOperation::Unlock);
+                false
+            }
+            Err(e) => e == rustix::io::Errno::WOULDBLOCK,
+        },
+    )
+}
+
+/// Starts the agent, detached, unless one runs. Its output goes to
+/// `nuage-tray.log` next to the daemon's log, appended.
 pub fn start() -> std::io::Result<()> {
+    if running() {
+        return Ok(());
+    }
     let program = crate::daemon::sibling(PROGRAM);
     let log = crate::daemon::log_file().map(|l| l.with_file_name("nuage-tray.log"));
     let append = |path: PathBuf| {
@@ -124,6 +139,18 @@ fn alive(proc: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::alive;
+
+    #[test]
+    fn one_agent_at_a_time() {
+        let Ok(Some(first)) = super::claim() else {
+            // An agent of this session already runs: nothing to check.
+            return;
+        };
+        assert!(super::running());
+        assert!(super::claim().unwrap().is_none());
+        drop(first);
+        assert!(!super::running());
+    }
 
     #[test]
     fn this_process_is_alive() {
