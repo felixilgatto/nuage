@@ -150,6 +150,25 @@ fn startup(app: &adw::Application) {
             return;
         }
     };
+    // The windows hide when closed (they keep their state while the
+    // program runs): it ends when the last visible one closes.
+    app.connect_window_added(|app, window| {
+        let app = app.downgrade();
+        window.connect_close_request(move |_| {
+            if let Some(app) = app.upgrade() {
+                glib::idle_add_local_once(move || {
+                    if !app
+                        .windows()
+                        .iter()
+                        .any(gtk::prelude::WidgetExt::is_visible)
+                    {
+                        app.quit();
+                    }
+                });
+            }
+            glib::Propagation::Proceed
+        });
+    });
     let ui = Ui::new(app, backend);
     UI.with(|u| *u.borrow_mut() = Some(Rc::clone(&ui)));
     add_actions(app, &ui);
