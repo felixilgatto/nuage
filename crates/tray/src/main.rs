@@ -8,7 +8,7 @@
 //!
 //! One agent per session (a lock next to the daemon's socket). It ends
 //! when the daemon stops (the user quit Nuage) or when the window's "Quit"
-//! or "Restart" stops it.
+//! or "Restart" asks it to (a connection on `nuage-tray.sock`).
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -97,13 +97,6 @@ enum UpdateNotice {
     Installed,
 }
 
-/// The icons of a source build (`data/icons`); installed icons are found
-/// in the system icon theme.
-fn source_icon_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
-    dir.is_dir().then_some(dir)
-}
-
 type Actions = Pin<Box<dyn Stream<Item = ashpd::desktop::notification::Action> + Send>>;
 
 struct Agent {
@@ -117,15 +110,15 @@ struct Agent {
 
 async fn run() -> Result<(), String> {
     let sockets = nuage_ipc::candidate_socket_paths().map_err(|e| e.to_string())?;
-    if let Err(e) = daemon::ensure(&sockets, &client_name()).await {
-        tracing::warn!(error = %e, "cannot start the Nuage service");
-    }
+    // Meanwhile the icon shows that the service is not reachable.
+    start_daemon(sockets.clone());
+    let stop = listen_for_stop()?;
 
     let (actions_tx, actions) = async_channel::unbounded::<TrayAction>();
     let mut icon = NuageTray::new(move |action| {
         let _ = actions_tx.try_send(action);
     });
-    if let Some(dir) = source_icon_dir() {
+    if let Some(dir) = nuage_tray::source_icon_dir() {
         icon = icon.with_icon_theme_path(dir.to_string_lossy());
     }
     let tray = match icon.spawn().await {
@@ -202,9 +195,7 @@ async fn run() -> Result<(), String> {
                     if crashed && last_restart.is_none_or(|t| t.elapsed() > RESTART_INTERVAL) {
                         tracing::warn!("the Nuage service stopped; starting it again");
                         last_restart = Some(Instant::now());
-                        if let Err(e) = daemon::ensure(&agent.sockets, &client_name()).await {
-                            tracing::warn!(error = %e, "cannot start the Nuage service again");
-                        }
+                        start_daemon(agent.sockets.clone());
                     }
                 }
                 Ok(Link::Event(Event::StatusChanged { status })) => {
@@ -230,6 +221,11 @@ async fn run() -> Result<(), String> {
                 agent.notification_action(action.name(), target).await;
             }
             Ok(event) = update_events.recv() => agent.update_event(event).await,
+            _ = stop.accept() => {
+                tracing::info!("asked to end by the window");
+                agent.set_status(None).await;
+                return Ok(());
+            }
         }
     }
 }
@@ -280,11 +276,18 @@ impl Agent {
     async fn command(&self, command: Command) {
         let error = match self.request(command).await {
             Ok(Ok(_)) => return,
+            // The daemon's messages are written for the user.
             Ok(Err(e)) => e.to_string(),
-            Err(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot reach the Nuage service");
+                gettext("The Nuage service is not running. Open Nuage to start it again.")
+            }
         };
-        self.send("command", Notification::new("Nuage").body(error.as_str()))
-            .await;
+        self.send(
+            "command",
+            Notification::new(&gettext("Nuage")).body(error.as_str()),
+        )
+        .await;
     }
 
     /// "Quit": stops the daemon, following the "quit with pending uploads"
@@ -457,6 +460,24 @@ impl Agent {
             _ => {}
         }
     }
+}
+
+/// Starts the daemon in the background, if it does not run: the agent keeps
+/// answering meanwhile (up to 10 s).
+fn start_daemon(sockets: Vec<PathBuf>) {
+    tokio::spawn(async move {
+        if let Err(e) = daemon::ensure(&sockets, &client_name()).await {
+            tracing::warn!(error = %e, "cannot start the Nuage service");
+        }
+    });
+}
+
+/// Listens on [`agent::stop_socket`]. This agent holds the lock: a socket
+/// left there is from an agent that ended.
+fn listen_for_stop() -> Result<tokio::net::UnixListener, String> {
+    let path = agent::stop_socket().ok_or("no runtime directory")?;
+    let _ = std::fs::remove_file(&path);
+    tokio::net::UnixListener::bind(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Opens the window (`nuage-gtk`), with an action to run in it. A window

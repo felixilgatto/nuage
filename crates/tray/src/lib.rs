@@ -22,6 +22,13 @@ use gettextrs::gettext;
 use ksni::TrayMethods;
 use nuage_core::{StatusReport, SyncState};
 
+/// The icons of a source build (`data/icons`); installed icons are found
+/// in the system icon theme.
+pub fn source_icon_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
+    dir.is_dir().then_some(dir)
+}
+
 pub use ksni::Handle;
 
 /// Something the user asked for from the tray menu.
@@ -117,9 +124,7 @@ impl NuageTray {
     /// Inside a Flatpak the well-known `org.kde.StatusNotifierItem-*` name
     /// cannot be owned, so the item is registered by its unique bus name only.
     pub async fn spawn(self) -> Result<Handle<Self>, ksni::Error> {
-        let in_flatpak = std::env::var_os("FLATPAK_ID").is_some()
-            || std::path::Path::new("/.flatpak-info").exists();
-        self.disable_dbus_name(in_flatpak).spawn().await
+        self.disable_dbus_name(updates::in_flatpak()).spawn().await
     }
 
     fn state(&self) -> SyncState {

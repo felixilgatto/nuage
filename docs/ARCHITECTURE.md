@@ -344,17 +344,22 @@ Two processes, clients of `nuaged` like the CLI:
   log in the user data folder) and again if it crashes (at most once a
   minute), shows the tray icon, sends the desktop notifications
   (Notification portal) and offers the updates of Nuage (update monitor
-  portal). One per session: a lock next to the daemon's socket holds its
-  PID. It ends when the daemon stops. What needs a window (preferences,
+  portal). One per session: a lock next to the daemon's socket. It ends
+  when the daemon stops, or on a connection to `nuage-tray.sock` next to
+  the lock (`agent::request_stop`; process IDs differ from one Flatpak
+  sandbox to the other). What needs a window (preferences,
   signing in again, adding an account, the question before quitting with
   pending uploads, restarting after an update) runs `nuage-gtk --action
   NAME [--target VALUE]`; a running window gets the request (GApplication
   command line). Refresh, pause, resume, opening a folder and quitting
   without a question are done by the agent itself.
 - `nuage-gtk` (crates `gtk`, `ui`) is the window. It starts the daemon and
-  the agent, and ends when its window closes (GTK and libadwaita take
-  about 65 MB more: they are only in memory while the window is open).
-  Quit and Restart stop the daemon, then the agent (`agent::stop`).
+  then the agent (not when the daemon fails: the window says why), and
+  ends when its last visible window closes, unless an account is being
+  set up (`Ui::busy`). GTK and libadwaita take about 65 MB more: they are
+  only in memory while the window is open. `--background` (the login
+  entry of native packages) starts the daemon and the agent, and ends.
+  Quit and Restart stop the daemon, then the agent.
 
 - `nuage_ui::Backend`: a thread with a tokio runtime runs the IPC client;
   the GTK code awaits its answers through `async-channel`, and receives the
@@ -406,15 +411,15 @@ Two processes, clients of `nuaged` like the CLI:
   the user's exclusions, removal (with the daemon's `busy` answer confirmed
   before `force`). Not tabs in Preferences, which would overflow with many
   accounts.
-- Updates of Nuage itself (Flatpak only; `Backend::watch_updates`): the
-  portal's `UpdateMonitor`, which checks the origin remote every 30 min.
+- Updates of Nuage itself (Flatpak only; the agent's `updates::monitor`,
+  one per session): the portal's `UpdateMonitor`, which checks the origin remote every 30 min.
   `UpdateAvailable` with a remote commit newer than the running one offers
-  **Update** (a toast that stays and a notification), which calls
+  **Update** (a notification), which calls
   `UpdateMonitor.Update`: the desktop asks once whether Nuage may update
   itself, and the portal refuses an update that adds permissions (the user
   is then sent to Software). Once the local commit differs from the running
   one (installed by the button, Software or `flatpak update`), **Restart**
-  stops the daemon and starts the new version with `Spawn` (`latest`).
+  (`nuage-gtk --action restart`) stops the daemon and starts the new version with `Spawn` (`latest`).
   The CLI has no equivalent: `flatpak update` is the command-line way.
 - Reconnecting (`ui/reconnect.rs`): `AccountReconnect` opens the sign-in
   in the browser, a dialog waits for `SignInWait` (Cancel, Copy link).
