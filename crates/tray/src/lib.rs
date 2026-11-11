@@ -1,4 +1,7 @@
-//! System tray icon (StatusNotifierItem + dbusmenu, through `ksni`).
+//! System tray icon (StatusNotifierItem + dbusmenu, through `ksni`), and
+//! what the `nuage-tray` agent shares with the window: starting the daemon
+//! ([`daemon`]), updates of Nuage ([`updates`]), the agent process
+//! ([`agent`]). No GTK here: the agent stays running, so it stays small.
 //!
 //! GTK4 has no AppIndicator support, so the icon is a pure-Rust D-Bus
 //! service. On GNOME it needs the AppIndicator extension (enabled by default
@@ -6,6 +9,10 @@
 //!
 //! The icon shows the aggregated state; its menu shows each account's state,
 //! quota and cache, and the actions of the brief.
+
+pub mod agent;
+pub mod daemon;
+pub mod updates;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -60,7 +67,8 @@ pub fn state_line(state: &SyncState) -> String {
     }
 }
 
-fn size(bytes: u64) -> String {
+/// A size for people, e.g. "1.2 GB".
+pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -83,7 +91,7 @@ pub struct NuageTray {
 }
 
 impl NuageTray {
-    /// `on_action` is called from the tray's D-Bus task, not the GTK thread.
+    /// `on_action` is called from the tray's D-Bus task.
     pub fn new(on_action: impl Fn(TrayAction) + Send + Sync + 'static) -> Self {
         Self {
             status: None,
@@ -195,15 +203,15 @@ impl ksni::Tray for NuageTray {
             if let Some(q) = a.quota
                 && let (Some(used), Some(total)) = (q.used, q.total)
             {
-                line.push_str(&format!(" · {} / {}", size(used), size(total)));
+                line.push_str(&format!(" · {} / {}", human_size(used), human_size(total)));
             }
             menu.push(Self::info(line));
             menu.push(Self::info(
-                gettext("    Cache: {}").replace("{}", &size(a.cache_used)),
+                gettext("    Cache: {}").replace("{}", &human_size(a.cache_used)),
             ));
             if a.offline_used > 0 {
                 menu.push(Self::info(
-                    gettext("    Offline: {}").replace("{}", &size(a.offline_used)),
+                    gettext("    Offline: {}").replace("{}", &human_size(a.offline_used)),
                 ));
             }
             if a.pins_pending > 0 {

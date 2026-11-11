@@ -1,6 +1,6 @@
 [package]
 name = "nuage-tray"
-description = "Nuage system tray icon (StatusNotifierItem)"
+description = "Nuage tray icon and background agent (no GTK): icon, notifications, updates"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,10 +9,22 @@ authors.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "nuage-tray"
+path = "src/main.rs"
+
 [dependencies]
+ashpd = { workspace = true, features = ["tokio"] }
+async-channel.workspace = true
+futures-util.workspace = true
 gettext-rs.workspace = true
 ksni.workspace = true
 nuage-core.workspace = true
+nuage-ipc.workspace = true
+rustix.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

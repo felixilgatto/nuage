@@ -18,6 +18,7 @@ gettext-rs.workspace = true
 gtk.workspace = true
 nuage-core.workspace = true
 nuage-ipc.workspace = true
+nuage-tray.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true
 

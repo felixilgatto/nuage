@@ -23,7 +23,7 @@ v1: Google Drive, **public from v1**. The architecture is multi-provider from th
 3. **Language**: **everything in the repository is in English**, including this brief: code, identifiers (including enum variants), comments, commit messages, README, `docs/`, UI and CLI strings. UI strings go through gettext so they can be translated later.
 4. **Modularity**: the modular architecture (see [Architecture](#architecture)) is in place from the first commit, even with a single provider.
 5. **MIT license**: `LICENSE` file at the root, `license = "MIT"` in every `Cargo.toml`, `<project_license>MIT</project_license>` in the `metainfo.xml`. `cargo-deny` only accepts MIT-compatible licenses (MIT, Apache-2.0, BSD, ISC, Zlib; MPL-2.0 case by case; GPL/AGPL refused). rclone is under MIT, so it can be bundled.
-6. **Names**: application **Nuage**; binaries `nuaged` (daemon), `nuage` (CLI), `nuage-gtk` (desktop app); crates `nuage-*`; Flatpak ID **`io.github.felixilgatto.Nuage`**.
+6. **Names**: application **Nuage**; binaries `nuaged` (daemon), `nuage` (CLI), `nuage-gtk` (desktop window), `nuage-tray` (desktop agent: tray icon, notifications); crates `nuage-*`; Flatpak ID **`io.github.felixilgatto.Nuage`**.
 7. **Points to verify**: unconfirmed technical assumptions are grouped in [To verify](#to-verify). Verify them at the indicated time rather than assuming they are true.
 
 ## Principles
@@ -91,8 +91,8 @@ Nuage is therefore justified by a native, simple and focused GNOME UX, mounting 
 |---|---|---|
 | Target | Ubuntu / GNOME with a graphical session | Linux server without a screen, administered over SSH |
 | Package | Flatpak (`.flatpak` bundle, Flathub in v2) | native binary: x86_64 tarball and `.deb` |
-| Contents | `nuaged` + `nuage-gtk` + `nuage` + rclone + `fusermount3` wrapper | `nuaged` + `nuage` + rclone (same pinned version) + systemd unit; **no GTK dependency** |
-| Daemon launch | by `nuage-gtk` (autostart via the Background portal) | systemd user service `nuaged.service`; `loginctl enable-linger` to run without an open session |
+| Contents | `nuaged` + `nuage-gtk` + `nuage-tray` + `nuage` + rclone + `fusermount3` wrapper | `nuaged` + `nuage` + rclone (same pinned version) + systemd unit; **no GTK dependency** |
+| Daemon launch | by `nuage-gtk` or `nuage-tray` (autostart of `nuage-tray` via the Background portal) | systemd user service `nuaged.service`; `loginctl enable-linger` to run without an open session |
 | FUSE | the host's `fusermount3`, via the wrapper (see [hard part](#the-hard-part-fuse-in-the-flatpak-sandbox)) | the system's `fusermount3`, directly |
 | Secrets | Secret portal | Secret Service if available, otherwise a `0600` file (see [Security](#security-and-storage)) |
 | Authentication | browser opened automatically | URL + SSH tunnel, or token generated elsewhere (see [Authentication](#accounts-and-authentication)) |
@@ -136,7 +136,8 @@ Everything that depends on a provider is isolated behind a `Provider` trait. Sin
 ```
 nuaged  (daemon: engine + rclone rcd)
    ▲  Unix socket, JSON (Command / Event)
-   ├─ nuage-gtk   desktop app: window + system tray icon
+   ├─ nuage-tray  desktop agent: system tray icon, notifications, updates
+   ├─ nuage-gtk   desktop app: the window
    └─ nuage       CLI (humans, scripts, agents)
 ```
 
@@ -159,9 +160,9 @@ nuage/
 │  ├─ fs/          nuage-fs         overlay FUSE file system (relay + exclusions in v1, pinning in v1.1)
 │  ├─ daemon/      nuaged           binary: engine + ipc server
 │  ├─ cli/         nuage            binary: CLI (clap), ipc client
-│  ├─ tray/        nuage-tray       StatusNotifierItem icon (ksni)
+│  ├─ tray/        nuage-tray       desktop agent: StatusNotifierItem icon (ksni), notifications
 │  ├─ ui/          nuage-ui         GTK4 + libadwaita: browser, setup, settings
-│  └─ gtk/         nuage-gtk        binary: assembles ui + tray, ipc client
+│  └─ gtk/         nuage-gtk        binary: the window, assembles ui, ipc client
 ├─ build-aux/flatpak/              manifest, fusermount-wrapper.sh, cargo-sources.json
 ├─ build-aux/native/               systemd unit, cargo-deb configuration, tarball script
 ├─ data/                           .desktop, metainfo.xml, icons, schemas
@@ -182,7 +183,7 @@ nuage/
 | `rclone-rc` | `core` |
 | `engine` | `core`, `rclone-rc`, `providers`, `fs` |
 | `daemon` | `engine`, `ipc`, `core` |
-| `cli`, `ui`, `tray`, `gtk` | `core`, `ipc` (+ `ui`, `tray` for `gtk`); **never** `engine` or `rclone-rc` |
+| `cli`, `ui`, `tray`, `gtk` | `core`, `ipc` (+ `tray` for `ui`, `ui` and `tray` for `gtk`); **never** `engine` or `rclone-rc` |
 
 `daemon` and `cli` must pull in **no GTK dependency** (checked in CI with `cargo tree`), so that the headless package installs on a bare server.
 
@@ -257,7 +258,7 @@ nuaged
  └─ PinManager        offline pinning (v1.1)
 ```
 
-In the Flatpak, `/app/bin` contains `rclone` (pinned version), the `fusermount3` wrapper, `nuaged`, `nuage` and `nuage-gtk`.
+In the Flatpak, `/app/bin` contains `rclone` (pinned version), the `fusermount3` wrapper, `nuaged`, `nuage`, `nuage-gtk` and `nuage-tray`.
 
 **Lifecycle:**
 
@@ -543,7 +544,7 @@ Goal: **account connected and sync started without leaving the window, with the 
    - **"Start automatically at login"** (`AdwSwitchRow`), **on by default**. It triggers the request to the Background portal; if the portal refuses, the switch turns off and a toast explains why. It is a global setting (not per account), shown only when adding the first account, and can be changed later in the settings.
    - Main button **"Start sync"** (`suggested-action`): creates the folder if needed and mounts the account; meanwhile it shows a spinner ("Setting up the folder…") and the form is locked. The window stays open and goes back to the list of accounts, with a toast "Google Drive is ready in ~/Cloud/Google Drive" and its "Open Folder" action; if the window is no longer in the foreground, the same thing is also sent as a notification. (Until polish 1, the window closed: the setup seemed to have failed.)
 
-On later launches, if at least one account exists, the app launched by the user opens the main window; started at login (`--background`), it stays in the system tray, with the window closed (decided at milestone 8).
+On later launches, if at least one account exists, the app launched by the user opens the main window; at login only the agent (`nuage-tray`) starts, in the system tray, with the window closed (decided at milestone 8). Closing the window ends `nuage-gtk`; the agent stays (decided 2026-11-11, to keep GTK out of memory).
 
 ### Main window
 
@@ -639,7 +640,7 @@ Modules:
 
 1. `rclone`: official binary with pinned sha256 (or Go build via the golang extension), installed in `/app/bin`.
 2. `fusermount-wrapper`: script installed as `/app/bin/fusermount3`.
-3. `nuage`: `cargo build --release --offline` (`nuaged`, `nuage`, `nuage-gtk`), `.desktop`, icon, `metainfo.xml`.
+3. `nuage`: `cargo build --release --offline` (`nuaged`, `nuage`, `nuage-gtk`, `nuage-tray`), `.desktop`, icon, `metainfo.xml`.
 
 `finish-args` (minimal):
 
