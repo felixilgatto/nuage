@@ -12,6 +12,7 @@
 //! ends.
 
 use std::cell::RefCell;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -42,6 +43,9 @@ fn main() -> glib::ExitCode {
             tracing_subscriber::EnvFilter::try_from_env("NUAGE_LOG")
                 .unwrap_or_else(|_| "info".into()),
         )
+        // Opened from the tray agent, standard error goes to its log.
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     let locale_dir =
@@ -112,12 +116,27 @@ fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -
         let Some(ui) = current_ui() else { return };
         let stopping =
             matches!(&request, Request::Action(name, _) if name == "quit-all" || name == "restart");
-        if later && !stopping {
-            ensure_running(&ui).await;
-        }
+        // Whether the daemon answers. The first launch asked at the start.
+        let running = if later && !stopping {
+            let running = ensure_running(&ui).await;
+            // The start had failed: nothing is loaded yet.
+            if running && ui.status().is_none() {
+                ui.reload().await;
+            }
+            running
+        } else {
+            ui.status().is_some()
+        };
         match request {
             // Login: only the daemon and the agent stay.
             Request::Background => ui.quit_if_idle(),
+            // Held until done: they may end without a window.
+            Request::Action(name, _) if name == "quit-all" => quit(&app, &ui).await,
+            Request::Action(name, _) if name == "restart" => restart(&app, &ui).await,
+            // Without the daemon, the window says why it does not run; with
+            // the daemon of another version, it offers to restart. Nothing
+            // else can be done in it.
+            _ if !running || ui.outdated() => ui.present(),
             Request::Window => {
                 if ui.accounts().is_empty() {
                     nuage_ui::onboarding::start(&ui);
@@ -125,9 +144,6 @@ fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -
                     ui.present();
                 }
             }
-            // Held until done: they may end without a window.
-            Request::Action(name, _) if name == "quit-all" => quit(&app, &ui).await,
-            Request::Action(name, _) if name == "restart" => restart(&app, &ui).await,
             Request::Action(name, target) => {
                 let target = target.map(|t| t.to_variant());
                 if app.lookup_action(&name).is_some() {
@@ -305,25 +321,6 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
         });
     }
     app.add_action(&account_preferences);
-    for (name, command) in [
-        ("refresh", Command::Refresh { account: None }),
-        ("pause-all", Command::Pause { account: None }),
-        ("resume-all", Command::Resume { account: None }),
-    ] {
-        let ui = Rc::clone(ui);
-        action(
-            name,
-            Box::new(move || {
-                let (ui, command) = (Rc::clone(&ui), command.clone());
-                glib::spawn_future_local(async move {
-                    if let Err(e) = ui.backend.call(command).await {
-                        ui.toast(&e);
-                        ui.present();
-                    }
-                });
-            }),
-        );
-    }
     {
         let ui = Rc::clone(ui);
         let app2 = app.clone();
@@ -373,6 +370,21 @@ async fn restart(app: &adw::Application, ui: &Rc<Ui>) {
     }
     // The new version starts its own agent: this one must be gone.
     stop_agent().await;
+    // A package, not the Flatpak: this program is already the new version.
+    // The daemon and the agent start again once the old daemon is gone.
+    if !nuage_tray::updates::in_flatpak() {
+        for _ in 0..100 {
+            if !ui.backend.daemon_running().await {
+                break;
+            }
+            glib::timeout_future(Duration::from_millis(100)).await;
+        }
+        if ensure_running(ui).await {
+            ui.reload().await;
+        }
+        ui.present();
+        return;
+    }
     match ui.backend.start_latest_version().await {
         Ok(()) => app.quit(),
         Err(e) => {

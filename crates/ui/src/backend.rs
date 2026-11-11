@@ -6,20 +6,13 @@
 //! daemon's events, reconnecting when the daemon restarts.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
-use nuage_core::{Command, Error, Event, Reply};
-use nuage_ipc::{Client, IpcError};
+use nuage_core::{Command, Error, Reply};
+use nuage_ipc::Client;
 
-/// What the interface hears from the daemon.
-#[derive(Debug, Clone)]
-pub enum BackendEvent {
-    /// Connected (again): the interface should reload its state.
-    Connected,
-    /// The daemon cannot be reached.
-    Disconnected(String),
-    Event(Event),
-}
+/// What the interface hears from the daemon. On `Connected` it reloads its
+/// state.
+pub use nuage_tray::daemon::Link as BackendEvent;
 
 /// An answer, or why there is none.
 pub type Answer = Result<Reply, String>;
@@ -66,7 +59,11 @@ impl Backend {
                     }
                 };
                 runtime.block_on(async move {
-                    tokio::spawn(forward_events(event_sockets, events_tx));
+                    tokio::spawn(nuage_tray::daemon::follow(
+                        event_sockets,
+                        client_name(),
+                        events_tx,
+                    ));
                     while let Ok(job) = jobs_rx.recv().await {
                         tokio::spawn(job());
                     }
@@ -118,6 +115,16 @@ impl Backend {
                 .await
                 .map_err(message)?;
             client.request(command).await.map_err(message)
+        })
+        .await
+    }
+
+    /// The version of the running daemon, if it answers.
+    pub async fn daemon_version(&self) -> Option<String> {
+        let sockets = self.sockets.clone();
+        self.run(async move {
+            let client = Client::connect_any(&sockets, &client_name()).await.ok()?;
+            Some(client.daemon_version().to_owned())
         })
         .await
     }
@@ -236,56 +243,3 @@ fn set_autostart_entry(enable: bool) -> Result<(), String> {
 }
 
 pub use nuage_tray::daemon::log_file;
-
-/// Sleeps on the GLib main loop.
-pub async fn glib_sleep(duration: Duration) {
-    gtk::glib::timeout_future(duration).await;
-}
-
-/// Subscribes to the daemon's events, forever, reconnecting as needed.
-async fn forward_events(sockets: Vec<PathBuf>, tx: async_channel::Sender<BackendEvent>) {
-    let mut connected = None;
-    loop {
-        match Client::connect_any(&sockets, &client_name()).await {
-            Ok(client) => match client.subscribe().await {
-                Ok(mut events) => {
-                    if tx.send(BackendEvent::Connected).await.is_err() {
-                        return;
-                    }
-                    connected = Some(true);
-                    loop {
-                        match events.next_event().await {
-                            Ok(Some(event)) => {
-                                if tx.send(BackendEvent::Event(event)).await.is_err() {
-                                    return;
-                                }
-                            }
-                            Ok(None) | Err(IpcError::ConnectionClosed) => break,
-                            Err(e) => {
-                                tracing::debug!(error = %e, "event stream failed");
-                                break;
-                            }
-                        }
-                    }
-                }
-                Err(e) => tracing::debug!(error = %e, "cannot subscribe"),
-            },
-            Err(e) => {
-                if connected != Some(false) {
-                    connected = Some(false);
-                    if tx
-                        .send(BackendEvent::Disconnected(e.to_string()))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            }
-        }
-        if connected == Some(true) {
-            connected = None;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}

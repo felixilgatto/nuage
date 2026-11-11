@@ -352,18 +352,33 @@ Two processes, clients of `nuaged` like the CLI:
   pending uploads, restarting after an update) runs `nuage-gtk --action
   NAME [--target VALUE]`; a running window gets the request (GApplication
   command line). Refresh, pause, resume, opening a folder and quitting
-  without a question are done by the agent itself.
+  without a question are done by the agent itself. A clicked notification
+  gives an activation token where the desktop has one (Notification portal
+  version 2): the agent passes it on (`XDG_ACTIVATION_TOKEN`) so the
+  window comes to the front on Wayland. Its log is `nuage-tray.log`, next
+  to the daemon's (standard error; the windows it opens write there too).
 - `nuage-gtk` (crates `gtk`, `ui`) is the window. It starts the daemon and
   then the agent (not when the daemon fails: the window says why), and
   ends when its last visible window closes, unless an account is being
-  set up (`Ui::busy`). GTK and libadwaita take about 65 MB more: they are
+  set up or files are being uploaded, downloaded, moved or deleted from the
+  browser (`Ui::busy`). A notification with buttons that must still work
+  afterwards ("… is ready", Open Folder) is handed to the agent
+  (`agent::Notice`, on `nuage-tray-notice.sock`). A launch while a setup is
+  under way only shows it again; without the daemon, every launch shows
+  why it does not run. After an update, a new window may find the daemon
+  and the agent of the previous version still running: if their version
+  differs from its own (`Welcome.daemon_version`), it only offers
+  "Restart Nuage" (`Ui::outdated`); if they speak another protocol, no
+  second daemon is started and the window says to quit Nuage first. The
+  daemon answers a request it does not know with an error. GTK and libadwaita take about 65 MB more: they are
   only in memory while the window is open. `--background` (the login
   entry of native packages) starts the daemon and the agent, and ends.
   Quit and Restart stop the daemon, then the agent.
 
 - `nuage_ui::Backend`: a thread with a tokio runtime runs the IPC client;
   the GTK code awaits its answers through `async-channel`, and receives the
-  daemon's events (reconnecting when it restarts).
+  daemon's events (reconnecting when it restarts; `tray::daemon::follow`,
+  shared with the agent).
 - Setup (`ui/onboarding.rs`), one window, at most four screens: provider →
   the user's OAuth client (only if the provider requires one and no account
   of it exists) → sign-in in the browser (or the credentials form) → folder

@@ -24,6 +24,8 @@ pub struct Ui {
     pub(crate) state: RefCell<UiState>,
     /// See [`Ui::busy`].
     busy: Cell<u32>,
+    /// See [`Ui::outdated`].
+    outdated: Cell<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -129,6 +131,7 @@ impl Ui {
             accounts_box,
             state: RefCell::new(UiState::default()),
             busy: Cell::new(0),
+            outdated: Cell::new(false),
         });
         ui.nav.add(&ui.home_page());
         ui
@@ -246,8 +249,18 @@ impl Ui {
             .build()
     }
 
+    /// Whether the running daemon is from another version of Nuage than
+    /// this window (Nuage was updated while it ran): the window only
+    /// offers to restart, since the two may not understand each other.
+    pub fn outdated(&self) -> bool {
+        self.outdated.get()
+    }
+
     /// Reloads the providers and the status from the daemon.
     pub async fn reload(self: &Rc<Self>) {
+        let version = self.backend.daemon_version().await;
+        self.outdated
+            .set(version.is_some_and(|v| v != nuage_core::VERSION));
         if let Ok(Reply::Providers(p)) = self.backend.call(Command::ListProviders).await {
             self.state.borrow_mut().providers = p;
         }
@@ -291,7 +304,24 @@ impl Ui {
     /// Shows a new status report.
     pub fn show_status(self: &Rc<Self>, report: StatusReport) {
         clear(&self.accounts_box);
-        if report.accounts.is_empty() {
+        if self.outdated.get() {
+            let restart = gtk::Button::builder()
+                .label(gettext("Restart Nuage"))
+                .action_name("app.restart")
+                .halign(gtk::Align::Center)
+                .css_classes(["pill", "suggested-action"])
+                .build();
+            let page = adw::StatusPage::builder()
+                .icon_name("software-update-available-symbolic")
+                .title(gettext("Nuage Was Updated"))
+                .description(gettext(
+                    "Restart Nuage to use the new version. Your folders are unmounted for a moment.",
+                ))
+                .child(&restart)
+                .vexpand(true)
+                .build();
+            self.accounts_box.append(&page);
+        } else if report.accounts.is_empty() {
             let add = gtk::Button::builder()
                 .label(gettext("Add Account"))
                 .action_name("app.add-account")
