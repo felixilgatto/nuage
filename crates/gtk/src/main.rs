@@ -245,6 +245,11 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
         let ui = Rc::clone(ui);
         action("open-window", Box::new(move || ui.present()));
     }
+    // The tray agent's "Quit" stopped the daemon: the windows go too.
+    {
+        let app2 = app.clone();
+        action("close-windows", Box::new(move || app2.quit()));
+    }
     // Notification buttons, with an account ID.
     let reconnect = gio::SimpleAction::new("reconnect", Some(glib::VariantTy::STRING));
     {

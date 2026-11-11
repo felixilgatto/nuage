@@ -298,8 +298,12 @@ impl Agent {
                 open_window(&["--action", "quit-all"]);
                 false
             }
-            // Stopped, stopping once the uploads are done, or not running.
-            Ok(Ok(_)) | Err(_) => true,
+            // Stopped, stopping once the uploads are done, or not running:
+            // the window goes too.
+            Ok(Ok(_)) | Err(_) => {
+                close_window().await;
+                true
+            }
         }
     }
 
@@ -468,6 +472,35 @@ fn open_window(args: &[&str]) {
         .spawn()
     {
         tracing::warn!(error = %e, program = %program.display(), "cannot open the window");
+    }
+}
+
+/// Closes the window if it is open (its `close-windows` action, through
+/// GApplication's `org.gtk.Actions` on the session bus).
+async fn close_window() {
+    use ashpd::zbus::{self, zvariant::Value};
+    let id = nuage_core::APP_ID;
+    let path = format!("/{}", id.replace('.', "/"));
+    let result = async {
+        let bus = zbus::Connection::session().await?;
+        bus.call_method(
+            Some(id),
+            path.as_str(),
+            Some("org.gtk.Actions"),
+            "Activate",
+            &(
+                "close-windows",
+                Vec::<Value<'_>>::new(),
+                std::collections::HashMap::<&str, Value<'_>>::new(),
+            ),
+        )
+        .await
+        .map(drop)
+    }
+    .await;
+    // Not open: nothing to close.
+    if let Err(e) = result {
+        tracing::debug!(error = %e, "no window to close");
     }
 }
 
