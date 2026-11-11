@@ -10,6 +10,7 @@
 //! when the daemon stops (the user quit Nuage) or when the window's "Quit"
 //! or "Restart" asks it to (a connection on `nuage-tray.sock`).
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::ExitCode;
@@ -19,9 +20,11 @@ use ashpd::desktop::notification::{Button, Notification, NotificationProxy, Prio
 use futures_util::{Stream, StreamExt};
 use gettextrs::gettext;
 use nuage_core::{AccountId, Command, Event, PinState, Reply, StatusReport};
-use nuage_ipc::{Client, IpcError};
+use nuage_ipc::Client;
+use nuage_tray::agent::{self, Notice};
+use nuage_tray::daemon::{self, Link};
 use nuage_tray::updates::{self, UpdateEvent};
-use nuage_tray::{NuageTray, TrayAction, agent, daemon};
+use nuage_tray::{NuageTray, TrayAction};
 
 /// Minimum delay between two restarts of a crashed daemon.
 const RESTART_INTERVAL: Duration = Duration::from_secs(60);
@@ -40,6 +43,9 @@ fn main() -> ExitCode {
             tracing_subscriber::EnvFilter::try_from_env("NUAGE_LOG")
                 .unwrap_or_else(|_| "info".into()),
         )
+        // The window sends the agent's standard error to `nuage-tray.log`.
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
     let locale_dir =
         std::env::var("NUAGE_LOCALE_DIR").unwrap_or_else(|_| DEFAULT_LOCALE_DIR.to_owned());
@@ -71,21 +77,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run()) {
+    let result = runtime.block_on(run());
+    // A folder that does not answer (see `open_folder`) must not keep the
+    // agent from ending.
+    runtime.shutdown_background();
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!(error = %e, "the tray agent stopped");
             ExitCode::FAILURE
         }
     }
-}
-
-/// What the agent hears from the daemon.
-#[derive(Debug)]
-enum Link {
-    Connected,
-    Disconnected,
-    Event(Event),
 }
 
 /// Where the update of Nuage stands, so each step is offered once.
@@ -112,7 +114,8 @@ async fn run() -> Result<(), String> {
     let sockets = nuage_ipc::candidate_socket_paths().map_err(|e| e.to_string())?;
     // Meanwhile the icon shows that the service is not reachable.
     start_daemon(sockets.clone());
-    let stop = listen_for_stop()?;
+    let stop = listen(agent::stop_socket())?;
+    let notices = listen(agent::notice_socket())?;
 
     let (actions_tx, actions) = async_channel::unbounded::<TrayAction>();
     let mut icon = NuageTray::new(move |action| {
@@ -127,7 +130,7 @@ async fn run() -> Result<(), String> {
             // Without an icon nothing would show that Nuage runs (GNOME
             // without the AppIndicator extension): open the window.
             tracing::warn!(error = %e, "no system tray available; running without an icon");
-            open_window(&[]);
+            open_window(&[], None);
             None
         }
     };
@@ -161,7 +164,7 @@ async fn run() -> Result<(), String> {
     }
 
     let (link_tx, link) = async_channel::unbounded();
-    tokio::spawn(follow_daemon(sockets.clone(), link_tx));
+    tokio::spawn(daemon::follow(sockets.clone(), client_name(), link_tx));
 
     let mut agent = Agent {
         sockets,
@@ -185,7 +188,7 @@ async fn run() -> Result<(), String> {
                         agent.set_status(Some(status)).await;
                     }
                 }
-                Ok(Link::Disconnected) => {
+                Ok(Link::Disconnected(_)) => {
                     agent.set_status(None).await;
                     if stopping {
                         tracing::info!("the Nuage service stopped; the tray agent ends");
@@ -218,7 +221,15 @@ async fn run() -> Result<(), String> {
                     .parameter()
                     .first()
                     .and_then(|v| String::try_from(v.clone()).ok());
-                agent.notification_action(action.name(), target).await;
+                let token = activation_token(action.parameter());
+                agent
+                    .notification_action(action.name(), target, token.as_deref())
+                    .await;
+            }
+            Ok((stream, _)) = notices.accept() => {
+                if let Some(notice) = read_notice(stream).await {
+                    agent.notice(&notice).await;
+                }
             }
             Ok(event) = update_events.recv() => agent.update_event(event).await,
             _ = stop.accept() => {
@@ -260,10 +271,10 @@ impl Agent {
     /// A menu item. Returns whether the agent should end.
     async fn tray_action(&mut self, action: TrayAction) -> bool {
         match action {
-            TrayAction::OpenWindow => open_window(&[]),
-            TrayAction::OpenFolder(path) => open_folder(&path).await,
-            TrayAction::AddAccount => open_window(&["--action", "add-account"]),
-            TrayAction::Preferences => open_window(&["--action", "preferences"]),
+            TrayAction::OpenWindow => open_window(&[], None),
+            TrayAction::OpenFolder(path) => open_folder(&path),
+            TrayAction::AddAccount => open_window(&["--action", "add-account"], None),
+            TrayAction::Preferences => open_window(&["--action", "preferences"], None),
             TrayAction::Refresh => self.command(Command::Refresh { account: None }).await,
             TrayAction::PauseAll => self.command(Command::Pause { account: None }).await,
             TrayAction::ResumeAll => self.command(Command::Resume { account: None }).await,
@@ -296,7 +307,7 @@ impl Agent {
     async fn quit(&self) -> bool {
         match self.request(Command::DaemonStop { now: false }).await {
             Ok(Err(_)) => {
-                open_window(&["--action", "quit-all"]);
+                open_window(&["--action", "quit-all"], None);
                 false
             }
             // Stopped, stopping once the uploads are done, or not running:
@@ -309,13 +320,19 @@ impl Agent {
     }
 
     /// A notification button (or the notification itself) was clicked.
-    async fn notification_action(&mut self, name: &str, target: Option<String>) {
+    /// `token` lets the window come to the front (see [`activation_token`]).
+    async fn notification_action(
+        &mut self,
+        name: &str,
+        target: Option<String>,
+        token: Option<&str>,
+    ) {
         let target = target.unwrap_or_default();
         match name {
             "reconnect" | "account-preferences" => {
-                open_window(&["--action", name, "--target", &target]);
+                open_window(&["--action", name, "--target", &target], token);
             }
-            "open-folder" => open_folder(Path::new(&target)).await,
+            "open-folder" => open_folder(Path::new(&target)),
             "install-update" => {
                 if self.update != UpdateNotice::Installing {
                     self.update = UpdateNotice::Installing;
@@ -323,9 +340,19 @@ impl Agent {
                     let _ = self.install.try_send(());
                 }
             }
-            "restart" => open_window(&["--action", "restart"]),
-            _ => open_window(&[]),
+            "restart" => open_window(&["--action", "restart"], token),
+            _ => open_window(&[], token),
         }
+    }
+
+    /// A notification the window handed over (see [`Notice`]).
+    async fn notice(&self, notice: &Notice) {
+        let folder = notice.folder.to_string_lossy();
+        let n = Notification::new(&gettext("Nuage"))
+            .body(notice.body.as_str())
+            .default_action("open-window")
+            .button(Button::new(&gettext("Open Folder"), "open-folder").target(folder.as_ref()));
+        self.send(&notice.id, n).await;
     }
 
     async fn send(&self, id: &str, notification: Notification) {
@@ -472,24 +499,52 @@ fn start_daemon(sockets: Vec<PathBuf>) {
     });
 }
 
-/// Listens on [`agent::stop_socket`]. This agent holds the lock: a socket
-/// left there is from an agent that ended.
-fn listen_for_stop() -> Result<tokio::net::UnixListener, String> {
-    let path = agent::stop_socket().ok_or("no runtime directory")?;
+/// Listens on one of the agent's sockets ([`agent::stop_socket`],
+/// [`agent::notice_socket`]). This agent holds the lock: a socket left
+/// there is from an agent that ended.
+fn listen(path: Option<PathBuf>) -> Result<tokio::net::UnixListener, String> {
+    let path = path.ok_or("no runtime directory")?;
     let _ = std::fs::remove_file(&path);
     tokio::net::UnixListener::bind(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Reads the notification the window wrote on [`agent::notice_socket`]. It
+/// writes it at once and closes: a second is plenty.
+async fn read_notice(stream: tokio::net::UnixStream) -> Option<Notice> {
+    use tokio::io::AsyncReadExt;
+    let mut text = String::new();
+    let mut stream = stream.take(64 * 1024);
+    let read = stream.read_to_string(&mut text);
+    match tokio::time::timeout(Duration::from_secs(1), read).await {
+        Ok(Ok(_)) => Notice::decode(&text),
+        _ => None,
+    }
+}
+
+/// The activation token of a clicked notification, if the desktop gives
+/// one (notification portal version 2: a dictionary after the action's
+/// target). On Wayland a window cannot come to the front without it.
+fn activation_token(parameter: &[ashpd::zbus::zvariant::OwnedValue]) -> Option<String> {
+    use ashpd::zbus::zvariant::OwnedValue;
+    use std::collections::HashMap;
+    parameter.iter().find_map(|value| {
+        let data = HashMap::<String, OwnedValue>::try_from(value.try_clone().ok()?).ok()?;
+        String::try_from(data.get("activation-token")?.try_clone().ok()?).ok()
+    })
+}
+
 /// Opens the window (`nuage-gtk`), with an action to run in it. A window
-/// already open gets the action. Started through tokio, which reaps it
+/// already open gets the action; with the `token` of the click that asked
+/// for it, it comes to the front. Started through tokio, which reaps it
 /// when it ends.
-fn open_window(args: &[&str]) {
+fn open_window(args: &[&str], token: Option<&str>) {
     let program = daemon::sibling("nuage-gtk");
-    if let Err(e) = tokio::process::Command::new(&program)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .spawn()
-    {
+    let mut command = tokio::process::Command::new(&program);
+    command.args(args).stdin(std::process::Stdio::null());
+    if let Some(token) = token.filter(|t| !t.is_empty()) {
+        command.env("XDG_ACTIVATION_TOKEN", token);
+    }
+    if let Err(e) = command.spawn() {
         tracing::warn!(error = %e, program = %program.display(), "cannot open the window");
     }
 }
@@ -523,61 +578,63 @@ async fn close_window() {
     }
 }
 
-/// Opens a folder in the file manager (OpenURI portal).
-async fn open_folder(path: &Path) {
-    let result = match std::fs::File::open(path) {
-        Ok(dir) => ashpd::desktop::open_uri::OpenFileRequest::default()
-            .send_file(&dir)
-            .await
-            .map(drop)
-            .map_err(|e| e.to_string()),
-        Err(e) => Err(e.to_string()),
-    };
-    if let Err(e) = result {
-        tracing::warn!(error = %e, path = %path.display(), "cannot open the folder");
-    }
+/// Opens a folder in the file manager (OpenURI portal). On its own task:
+/// a folder that does not answer, or a question from the portal, must not
+/// keep the agent from doing anything else.
+fn open_folder(path: &Path) {
+    let path = path.to_owned();
+    tokio::spawn(async move {
+        let opened = {
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || std::fs::File::open(path)).await
+        };
+        let result = match opened {
+            Ok(Ok(dir)) => ashpd::desktop::open_uri::OpenFileRequest::default()
+                .send_file(&dir)
+                .await
+                .map(drop)
+                .map_err(|e| e.to_string()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = result {
+            tracing::warn!(error = %e, path = %path.display(), "cannot open the folder");
+        }
+    });
 }
 
-/// Follows the daemon's events, forever, reconnecting as needed.
-async fn follow_daemon(sockets: Vec<PathBuf>, tx: async_channel::Sender<Link>) {
-    let mut connected = None;
-    loop {
-        match Client::connect_any(&sockets, &client_name()).await {
-            Ok(client) => match client.subscribe().await {
-                Ok(mut events) => {
-                    if tx.send(Link::Connected).await.is_err() {
-                        return;
-                    }
-                    connected = Some(true);
-                    loop {
-                        match events.next_event().await {
-                            Ok(Some(event)) => {
-                                if tx.send(Link::Event(event)).await.is_err() {
-                                    return;
-                                }
-                            }
-                            Ok(None) | Err(IpcError::ConnectionClosed) => break,
-                            Err(e) => {
-                                tracing::debug!(error = %e, "event stream failed");
-                                break;
-                            }
-                        }
-                    }
-                }
-                Err(e) => tracing::debug!(error = %e, "cannot subscribe"),
-            },
-            Err(_) => {
-                if connected != Some(false) {
-                    connected = Some(false);
-                    if tx.send(Link::Disconnected).await.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-        if connected == Some(true) {
-            connected = None;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+#[cfg(test)]
+mod tests {
+    use ashpd::zbus::zvariant::{OwnedValue, Value};
+    use std::collections::HashMap;
+
+    fn owned(value: Value<'_>) -> OwnedValue {
+        value.try_to_owned().unwrap()
+    }
+
+    #[test]
+    fn activation_token_of_a_click() {
+        let target = owned(Value::from("account"));
+        let platform = |token: Option<&str>| {
+            let data: HashMap<&str, Value<'_>> = token
+                .into_iter()
+                .map(|t| ("activation-token", Value::from(t)))
+                .collect();
+            owned(Value::from(data))
+        };
+        // Portal version 2: the platform data follows the target, if any.
+        let with_target = [target.try_clone().unwrap(), platform(Some("tok"))];
+        assert_eq!(
+            super::activation_token(&with_target).as_deref(),
+            Some("tok")
+        );
+        assert_eq!(
+            super::activation_token(&[platform(Some("tok"))]).as_deref(),
+            Some("tok")
+        );
+        // Version 1, or a desktop that gives no token.
+        assert_eq!(super::activation_token(&[target]), None);
+        assert_eq!(super::activation_token(&[platform(None)]), None);
+        assert_eq!(super::activation_token(&[]), None);
     }
 }
