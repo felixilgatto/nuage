@@ -1,6 +1,6 @@
 //! The main window: the accounts, their state and quota, and "+".
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -11,7 +11,6 @@ use gtk::{gio, glib};
 use nuage_core::{AccountId, AccountStatus, Command, ProviderInfo, Reply, StatusReport, SyncState};
 
 use crate::Backend;
-use crate::backend::UpdateEvent;
 
 /// Everything the interface shares.
 #[derive(Debug)]
@@ -23,6 +22,8 @@ pub struct Ui {
     toasts: adw::ToastOverlay,
     accounts_box: gtk::Box,
     pub(crate) state: RefCell<UiState>,
+    /// See [`Ui::busy`].
+    busy: Cell<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -31,24 +32,24 @@ pub(crate) struct UiState {
     pub(crate) providers: Vec<ProviderInfo>,
     /// Created the first time it is opened.
     pub(crate) browser: Option<Rc<crate::browser::Browser>>,
-    /// Where the update of Nuage itself stands, and its toast.
-    pub(crate) update: UpdateNotice,
-    pub(crate) update_toast: Option<adw::Toast>,
 }
 
-/// What the interface last said about an update of Nuage itself.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UpdateNotice {
-    #[default]
-    None,
-    Available,
-    Installing,
-    Installed,
-}
+/// See [`Ui::busy`].
+#[derive(Debug)]
+#[must_use]
+pub struct Busy(Rc<Ui>);
 
-/// ID of the notification about an update of Nuage, sent by the tray
-/// agent: installing from the window withdraws it.
-const UPDATE_NOTIFICATION: &str = "update";
+impl Drop for Busy {
+    fn drop(&mut self) {
+        let ui = &self.0;
+        ui.busy.set(ui.busy.get() - 1);
+        // Later: a notification sent just before is delivered first.
+        let ui = Rc::clone(ui);
+        glib::timeout_add_local_once(std::time::Duration::from_secs(1), move || {
+            ui.quit_if_idle();
+        });
+    }
+}
 
 /// A short, human state line.
 pub fn state_text(state: &SyncState) -> String {
@@ -114,7 +115,8 @@ impl Ui {
             .default_height(620)
             .content(&toasts)
             .build();
-        // Closing the window does not stop anything: it only hides it.
+        // Closing the window hides it: it keeps its state while the program
+        // runs (until the last visible window closes, see `quit_if_idle`).
         window.set_hide_on_close(true);
 
         let accounts_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -126,6 +128,7 @@ impl Ui {
             toasts,
             accounts_box,
             state: RefCell::new(UiState::default()),
+            busy: Cell::new(0),
         });
         ui.nav.add(&ui.home_page());
         ui
@@ -147,77 +150,20 @@ impl Ui {
         self.toasts.add_toast(toast);
     }
 
-    /// Tells the user about an update of Nuage itself, once per step.
-    pub fn update_event(&self, event: UpdateEvent) {
-        let notice = self.state.borrow().update;
-        match event {
-            UpdateEvent::Available if notice == UpdateNotice::None => self.update_available(),
-            UpdateEvent::Installed if notice != UpdateNotice::Installed => self.update_installed(),
-            UpdateEvent::Failed(e) => self.update_failed(&e),
-            _ => {}
+    /// Keeps the program running, its window closed or not, until the
+    /// guard is dropped: for work that must not be cut short (an account
+    /// being set up).
+    pub fn busy(self: &Rc<Self>) -> Busy {
+        self.busy.set(self.busy.get() + 1);
+        Busy(Rc::clone(self))
+    }
+
+    /// Ends the program if no window is visible and nothing keeps it busy:
+    /// the tray agent stays.
+    pub fn quit_if_idle(&self) {
+        if self.busy.get() == 0 && !self.app.windows().iter().any(WidgetExt::is_visible) {
+            self.app.quit();
         }
-    }
-
-    /// Installs the available update (button "Update").
-    pub fn install_update(&self) {
-        if self.state.borrow().update == UpdateNotice::Installing {
-            return;
-        }
-        self.show_update_toast(
-            adw::Toast::builder()
-                .title(gettext("Updating Nuage…"))
-                .timeout(0)
-                .build(),
-        );
-        self.app.withdraw_notification(UPDATE_NOTIFICATION);
-        self.state.borrow_mut().update = UpdateNotice::Installing;
-        self.backend.install_update();
-    }
-
-    /// Replaces the toast about the update, if any, with `toast`.
-    fn show_update_toast(&self, toast: adw::Toast) {
-        if let Some(old) = self.state.borrow_mut().update_toast.replace(toast.clone()) {
-            old.dismiss();
-        }
-        self.toasts.add_toast(toast);
-    }
-
-    /// A newer version is in the repository: offer to install it (a toast
-    /// that stays; the tray agent sends the notification).
-    fn update_available(&self) {
-        self.show_update_toast(
-            adw::Toast::builder()
-                .title(gettext("A new version of Nuage is available"))
-                .button_label(gettext("Update"))
-                .action_name("app.install-update")
-                .timeout(0)
-                .build(),
-        );
-        self.state.borrow_mut().update = UpdateNotice::Available;
-    }
-
-    /// A newer version is installed: offer to restart (a toast that stays;
-    /// the tray agent sends the notification).
-    fn update_installed(&self) {
-        self.show_update_toast(
-            adw::Toast::builder()
-                .title(gettext("A new version of Nuage is installed"))
-                .button_label(gettext("Restart"))
-                .action_name("app.restart")
-                .timeout(0)
-                .build(),
-        );
-        self.state.borrow_mut().update = UpdateNotice::Installed;
-    }
-
-    /// Installing the update failed: say so, and where else to update. The
-    /// portal's message is technical: it goes to the log only.
-    fn update_failed(&self, error: &str) {
-        tracing::warn!(error, "cannot install the update");
-        let text = gettext("Nuage could not update itself. Update it from Software instead.");
-        self.show_update_toast(adw::Toast::builder().title(&text).timeout(0).build());
-        // Offered again if the monitor reports the update again.
-        self.state.borrow_mut().update = UpdateNotice::None;
     }
 
     /// Shows the window, at the accounts list.

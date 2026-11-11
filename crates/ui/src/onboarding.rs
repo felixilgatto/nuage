@@ -440,7 +440,10 @@ fn sign_in_page(
     };
     let ui = Rc::clone(ui);
     let this = nav_page.clone();
+    // Closing the window while the browser is open does not end the sign-in.
+    let busy = ui.busy();
     glib::spawn_future_local(async move {
+        let _busy = busy;
         let started = ui.backend.call(Command::AccountAdd(Box::new(args))).await;
         let sign_in = match started {
             Ok(Reply::SignIn(s)) => s,
@@ -566,7 +569,9 @@ fn create(ui: &Rc<Ui>, provider: &ProviderInfo, args: AccountAddArgs, button: Op
         ..args
     };
     let ui = Rc::clone(ui);
+    let busy = ui.busy();
     glib::spawn_future_local(async move {
+        let _busy = busy;
         match ui.backend.call(Command::AccountAdd(Box::new(args))).await {
             Ok(Reply::Account(account)) => show_folder_page(&ui, account),
             Ok(_) => {}
@@ -746,7 +751,11 @@ fn folder_page(ui: &Rc<Ui>, account: Account, first: bool) -> adw::NavigationPag
         let (ui, account, path) = (Rc::clone(&ui2), account.clone(), folder.borrow().clone());
         let (button, group, autostart) = (button.clone(), group.clone(), autostart.clone());
         let (page, done) = (page2.clone(), Rc::clone(&done));
+        // Closing the window meanwhile does not stop the setup: the
+        // notification says when it is ready.
+        let busy = ui.busy();
         glib::spawn_future_local(async move {
+            let _busy = busy;
             let mut account = account;
             if path != account.mount_point {
                 match ui

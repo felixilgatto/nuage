@@ -21,8 +21,6 @@ pub enum BackendEvent {
     Event(Event),
 }
 
-pub use nuage_tray::updates::UpdateEvent;
-
 /// An answer, or why there is none.
 pub type Answer = Result<Reply, String>;
 
@@ -35,8 +33,6 @@ type Job =
 pub struct Backend {
     jobs: async_channel::Sender<Job>,
     sockets: Vec<PathBuf>,
-    /// Requests to install the available update, read by [`Self::watch_updates`].
-    install: (async_channel::Sender<()>, async_channel::Receiver<()>),
 }
 
 fn client_name() -> String {
@@ -80,7 +76,6 @@ impl Backend {
             Self {
                 jobs: jobs_tx,
                 sockets,
-                install: async_channel::bounded(1),
             },
             events_rx,
         ))
@@ -152,7 +147,7 @@ impl Backend {
     /// refuses (it only knows sandboxed applications): an XDG autostart
     /// entry is written instead.
     pub async fn request_autostart(&self, enable: bool) -> Result<bool, String> {
-        if !in_flatpak() {
+        if !nuage_tray::updates::in_flatpak() {
             return set_autostart_entry(enable).map(|()| enable);
         }
         self.run(async move {
@@ -169,33 +164,6 @@ impl Backend {
             Ok(response.auto_start())
         })
         .await
-    }
-
-    /// In the Flatpak, reports updates of Nuage itself on the returned
-    /// channel, and installs the available one on [`Self::install_update`].
-    /// Outside the Flatpak or without the portal, nothing is ever reported.
-    pub fn watch_updates(&self) -> async_channel::Receiver<UpdateEvent> {
-        let (tx, rx) = async_channel::unbounded();
-        if !in_flatpak() {
-            return rx;
-        }
-        let install = self.install.1.clone();
-        let backend = self.clone();
-        gtk::glib::spawn_future_local(async move {
-            let result = backend
-                .run(async move { nuage_tray::updates::monitor(tx, install).await })
-                .await;
-            if let Err(e) = result {
-                tracing::info!(error = %e, "no update monitor");
-            }
-        });
-        rx
-    }
-
-    /// Asks the update monitor to install the available update. The outcome
-    /// arrives on [`Self::watch_updates`]'s channel.
-    pub fn install_update(&self) {
-        let _ = self.install.0.try_send(());
     }
 
     /// Starts the newest installed version of Nuage once this instance has
@@ -230,10 +198,6 @@ const RELAUNCH: &str = concat!(
     "--method org.freedesktop.DBus.NameHasOwner io.github.felixilgatto.Nuage ",
     "| grep -q true || break; sleep 0.5; done; exec nuage-gtk"
 );
-
-fn in_flatpak() -> bool {
-    std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists()
-}
 
 /// `~/.config/autostart/<app id>.desktop`, running this executable with
 /// `--background`.
