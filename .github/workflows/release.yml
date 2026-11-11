@@ -77,7 +77,7 @@ jobs:
           "$RUNNER_TEMP/home/.local/bin/nuage" --version
           "$RUNNER_TEMP/home/.local/lib/nuage/rclone" version | head -1
       - run: rm -f target/dist/SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.arch }}
           path: target/dist/
@@ -107,7 +107,7 @@ jobs:
           upload-artifact: false
       # The unsigned OSTree repository; flatpak-repo signs and merges them.
       - run: tar -cf flatpak-repo-${{ matrix.arch }}.tar repo
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flatpak-repo-${{ matrix.arch }}
           path: flatpak-repo-${{ matrix.arch }}.tar
@@ -120,7 +120,7 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: flatpak-repo-*
           merge-multiple: true
@@ -153,16 +153,16 @@ jobs:
         run: |
           command -v python3 >/dev/null || dnf install -y -q python3
           scripts/test-flatpak-repo.sh "$KEY_ID" site bundles/nuage-x86_64.flatpak
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flatpak-bundles
           path: bundles/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flatpak-site
           path: site/
       - if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/
 
@@ -175,7 +175,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: "{native-*,flatpak-bundles}"
           path: dist
@@ -185,10 +185,10 @@ jobs:
           cd dist
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-files
           path: dist/
@@ -201,7 +201,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-files
           path: dist
@@ -238,4 +238,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
