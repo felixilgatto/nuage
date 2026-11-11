@@ -47,14 +47,14 @@ jobs:
           echo "Flatpak repository of $tag"
       - name: The page from website/
         run: scripts/site-page.sh "$PAGES_URL" site
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: site
           path: |
             site/
             !site/repo/
       - if: inputs.publish && github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/
 
@@ -70,4 +70,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
