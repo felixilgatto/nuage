@@ -458,10 +458,11 @@ impl Agent {
 }
 
 /// Opens the window (`nuage-gtk`), with an action to run in it. A window
-/// already open gets the action.
+/// already open gets the action. Started through tokio, which reaps it
+/// when it ends.
 fn open_window(args: &[&str]) {
     let program = daemon::sibling("nuage-gtk");
-    if let Err(e) = std::process::Command::new(&program)
+    if let Err(e) = tokio::process::Command::new(&program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .spawn()

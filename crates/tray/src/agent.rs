@@ -92,9 +92,31 @@ pub fn stop() {
     }
     let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
     for _ in 0..20 {
-        if !proc.exists() {
+        if !alive(&proc) {
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Whether the process of `/proc/<pid>` still runs. An ended child of this
+/// process stays as a zombie until reaped: it counts as gone.
+fn alive(proc: &std::path::Path) -> bool {
+    std::fs::read_to_string(proc.join("stat")).is_ok_and(|stat| {
+        // `pid (comm) state …`: the state follows the last parenthesis.
+        stat.rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .is_some_and(|state| state != "Z" && state != "X")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::alive;
+
+    #[test]
+    fn this_process_is_alive() {
+        assert!(alive(std::path::Path::new("/proc/self")));
+        assert!(!alive(std::path::Path::new("/proc/no-such-process")));
     }
 }
