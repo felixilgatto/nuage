@@ -4,6 +4,9 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+- The OneDrive Personal Vault no longer fills the log with an error at
+  every listing.
+
 ## [0.2.3] - 2026-11-11
 
 - Files kept offline open again instantly: Nuage keeps them in memory as

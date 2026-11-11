@@ -204,6 +204,9 @@ impl Engine {
             cache_dir: config.paths.cache_dir.clone(),
             pid_file: Some(config.paths.rcd_pid_file()),
         });
+        for provider in registry.iter() {
+            nuage_rclone::expect_errors(provider.expected_errors());
+        }
         let (events, _) = broadcast::channel(256);
         let pins = pins::Pins::open(&config.paths.pin_db())?;
         Ok(Self {
