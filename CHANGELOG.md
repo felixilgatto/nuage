@@ -6,6 +6,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 - Nuage takes about 65 MB less memory when its window is closed: the
   tray icon and the notifications now run in a small program of their own.
+- After an update, opening Nuage offers to restart it to use the new
+  version.
 
 ## [0.2.3] - 2026-11-11
 

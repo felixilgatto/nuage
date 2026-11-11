@@ -77,6 +77,16 @@ impl From<Outcome> for Result<Reply, Error> {
 }
 
 /// Explains a protocol version mismatch to the user.
+/// The ID of a request that could not be read as a [`ClientMessage`] (a
+/// command this version does not know), so that it can still be answered.
+pub(crate) fn request_id(line: &str) -> Option<u64> {
+    let message: serde_json::Value = serde_json::from_str(line).ok()?;
+    if message.get("type")?.as_str()? != "request" {
+        return None;
+    }
+    message.get("id")?.as_u64()
+}
+
 pub(crate) fn mismatch_message(client: u32, daemon: u32) -> String {
     let advice = if client < daemon {
         "this client is older than the running daemon; update it"

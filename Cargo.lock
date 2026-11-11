@@ -1514,7 +1514,6 @@ dependencies = [
  "nuage-core",
  "nuage-tray",
  "nuage-ui",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1578,7 +1577,6 @@ version = "0.2.3"
 dependencies = [
  "ashpd",
  "async-channel",
- "futures-util",
  "gettext-rs",
  "gtk4",
  "libadwaita",

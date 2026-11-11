@@ -21,7 +21,6 @@ gtk.workspace = true
 nuage-core.workspace = true
 nuage-tray.workspace = true
 nuage-ui.workspace = true
-tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

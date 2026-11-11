@@ -1269,7 +1269,11 @@ impl Browser {
         }
         self.set_busy(1);
         let this = Rc::clone(self);
+        // Closing the window meanwhile does not drop the commands not sent
+        // yet.
+        let busy = self.ui.busy();
         glib::spawn_future_local(async move {
+            let _busy = busy;
             let mut failed = None;
             for command in commands {
                 if let Err(message) = this.ui.backend.call(command).await {

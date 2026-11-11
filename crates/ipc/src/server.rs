@@ -197,6 +197,17 @@ async fn serve_connection<H: Handler>(
             }
             Err(e) => {
                 tracing::warn!(error = %e, "ignoring malformed client message");
+                // A request from another version of Nuage, which this
+                // daemon does not know: answered, so that the client does
+                // not wait forever.
+                if let Some(id) = protocol::request_id(&line) {
+                    let outcome = Outcome::Error(Error::Unsupported(
+                        "The running Nuage service is from another version and cannot do this. \
+                         Quit Nuage and open it again."
+                            .to_owned(),
+                    ));
+                    let _ = tx.send(ServerMessage::Response { id, outcome }).await;
+                }
             }
         }
     }

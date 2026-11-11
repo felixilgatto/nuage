@@ -13,7 +13,6 @@ publish.workspace = true
 adw.workspace = true
 ashpd = { workspace = true, features = ["tokio"] }
 async-channel.workspace = true
-futures-util.workspace = true
 gettext-rs.workspace = true
 gtk.workspace = true
 nuage-core.workspace = true

@@ -22,10 +22,18 @@ use nuage_core::{Account, AccountAddArgs, AuthKind, Command, CustomClient, Provi
 
 use crate::window::Ui;
 
-/// Starts the setup over the accounts list.
+/// Starts the setup over the accounts list. A setup already under way is
+/// only shown again: starting over would cancel its sign-in and lose what
+/// was typed.
 pub fn start(ui: &Rc<Ui>) {
-    ui.nav.pop_to_tag("home");
-    ui.nav.push(&provider_page(ui));
+    let home = ui
+        .nav
+        .visible_page()
+        .and_then(|page| page.tag())
+        .is_some_and(|tag| tag == "home");
+    if home {
+        ui.nav.push(&provider_page(ui));
+    }
     ui.present();
 }
 
@@ -824,6 +832,16 @@ fn finish(ui: &Rc<Ui>, account: &Account) {
         target.clone(),
     );
     if !ui.window.is_active() {
+        // Sent by the tray agent: this program ends with its window, and
+        // nothing would answer the notification's buttons after that.
+        let notice = nuage_tray::agent::Notice {
+            id: format!("ready-{}", account.id),
+            body: text.clone(),
+            folder: account.mount_point.clone(),
+        };
+        if notice.send() {
+            return;
+        }
         let notification = gio::Notification::new(&gettext("Nuage"));
         notification.set_body(Some(&text));
         notification.set_default_action("app.open-window");

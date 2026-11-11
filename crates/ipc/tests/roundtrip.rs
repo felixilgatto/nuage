@@ -92,6 +92,59 @@ async fn protocol_mismatch_is_rejected() {
     }
 }
 
+/// A command from a newer client gets an error, not silence: the client
+/// would wait for its answer forever.
+#[tokio::test]
+async fn unknown_command_is_answered() {
+    let (_dir, path, _events) = start().await;
+    let stream = UnixStream::connect(&path).await.unwrap();
+    let (read, mut write) = stream.into_split();
+    let mut lines = BufReader::new(read).lines();
+    let hello = format!(
+        "{{\"type\":\"hello\",\"protocol_version\":{PROTOCOL_VERSION},\"client\":\"future\"}}\n"
+    );
+    write.write_all(hello.as_bytes()).await.unwrap();
+    let welcome = lines.next_line().await.unwrap().unwrap();
+    assert!(matches!(
+        serde_json::from_str::<ServerMessage>(&welcome).unwrap(),
+        ServerMessage::Welcome { .. }
+    ));
+    write
+        .write_all(
+            b"{\"type\":\"request\",\"id\":7,\"command\":{\"command\":\"from_the_future\"}}\n",
+        )
+        .await
+        .unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .expect("no answer")
+        .unwrap()
+        .unwrap();
+    match serde_json::from_str::<ServerMessage>(&answer).unwrap() {
+        ServerMessage::Response { id, outcome } => {
+            assert_eq!(id, 7);
+            assert!(matches!(
+                outcome,
+                nuage_ipc::Outcome::Error(Error::Unsupported(_))
+            ));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // Still usable: a known command is answered as usual.
+    write
+        .write_all(b"{\"type\":\"request\",\"id\":8,\"command\":{\"command\":\"status\"}}\n")
+        .await
+        .unwrap();
+    let answer = lines.next_line().await.unwrap().unwrap();
+    assert!(matches!(
+        serde_json::from_str::<ServerMessage>(&answer).unwrap(),
+        ServerMessage::Response {
+            id: 8,
+            outcome: nuage_ipc::Outcome::Ok(Reply::Status(_))
+        }
+    ));
+}
+
 #[tokio::test]
 async fn second_daemon_is_refused_and_stale_socket_replaced() {
     let (_dir, path, _events) = start().await;

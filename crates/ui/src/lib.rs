@@ -15,7 +15,7 @@ mod window;
 
 use gettextrs::gettext;
 
-pub use backend::{Backend, BackendEvent, glib_sleep, log_file};
+pub use backend::{Backend, BackendEvent, log_file};
 pub use window::{Busy, Ui, human_size, open_folder, state_icon, state_text};
 
 /// gettext domain of the application.
