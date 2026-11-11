@@ -89,6 +89,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.3" date="2026-11-11">
+      <description>
+        <ul>
+          <li>Files kept offline open again instantly: Nuage keeps them in memory as long as they have not changed.</li>
+          <li>Folders on Google Drive, OneDrive and Dropbox open faster: Nuage asks the provider for their content less often, and still sees changes made elsewhere within a minute.</li>
+          <li>Nuage wakes up less often when nothing is syncing, which saves battery.</li>
+          <li>Security: Nuage now uses SQLite 3.54, which fixes a flaw in reading damaged database files.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.2" date="2026-11-07">
       <description>
         <ul>
