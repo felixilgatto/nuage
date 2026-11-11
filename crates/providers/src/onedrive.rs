@@ -93,6 +93,13 @@ impl Provider for OneDrive {
         None
     }
 
+    fn expected_errors(&self) -> &'static [&'static str] {
+        // The Personal Vault: Microsoft refuses to list it to other
+        // applications, at every listing of the root. Its name depends on
+        // the language, so it cannot be excluded by name.
+        &["ObjectHandle is Invalid"]
+    }
+
     fn client_id_suffix(&self) -> Option<&'static str> {
         None
     }

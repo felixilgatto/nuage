@@ -248,8 +248,29 @@ fn about_deleted_cache(line: &str) -> bool {
     })
 }
 
+/// Pieces of lines rclone logs that are expected and say nothing useful.
+static EXPECTED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// Sends rclone's lines containing one of `patterns` to the debug log
+/// (errors a provider always gives, see `Provider::expected_errors`).
+pub fn expect_errors(patterns: &[&'static str]) {
+    if let Ok(mut expected) = EXPECTED.lock() {
+        for p in patterns {
+            if !expected.contains(p) {
+                expected.push(p);
+            }
+        }
+    }
+}
+
+fn is_expected(line: &str) -> bool {
+    EXPECTED
+        .lock()
+        .is_ok_and(|expected| expected.iter().any(|p| line.contains(p)))
+}
+
 fn log_line(line: &str) {
-    if about_deleted_cache(line) {
+    if about_deleted_cache(line) || is_expected(line) {
         tracing::debug!(target: "rclone", "{line}");
     } else {
         tracing::info!(target: "rclone", "{line}");
@@ -340,6 +361,16 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn expected_lines() {
+        let line = "ERROR : Personal Vault: error reading source directory: couldn't list files: invalidRequest: invalidResourceId: ObjectHandle is Invalid";
+        assert!(!is_expected(line));
+        expect_errors(&["ObjectHandle is Invalid"]);
+        expect_errors(&["ObjectHandle is Invalid"]);
+        assert!(is_expected(line));
+        assert!(!is_expected("ERROR : a.txt: Failed to copy: 403 Forbidden"));
+    }
 
     #[test]
     fn debug_hides_the_password() {

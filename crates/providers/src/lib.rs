@@ -85,6 +85,13 @@ pub trait Provider: Send + Sync {
         0
     }
 
+    /// Pieces of rclone error lines that are expected with this provider
+    /// and say nothing useful (e.g. a folder the provider never lets other
+    /// applications open). Those lines go to the debug log.
+    fn expected_errors(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Folder of the remote the account shows (e.g. an S3 bucket),
     /// slash-separated, without leading or trailing slash. Empty: the whole
     /// remote.

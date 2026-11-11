@@ -43,6 +43,7 @@ the abstraction is missing something; extend `nuage-core` (e.g.
 | `root(input)` *(optional)* | folder of the remote the account shows (e.g. the S3 bucket); empty for the whole remote |
 | `validate(input)` *(optional)* | checks the input before anything is created; the error says what to fix |
 | `choice_rank(question, choice)` *(optional)* | order in which to try the choices rclone offers for a question `config_params()` does not answer (e.g. the OneDrive drive); lower first |
+| `expected_errors()` *(optional)* | pieces of rclone error lines this provider always gives and that say nothing useful (e.g. the OneDrive Personal Vault); they go to the debug log |
 | `info()` *(provided)* | the description sent to clients; do not override |
 
 Helpers in `lib.rs` for the usual cases: `oauth_params()` (own client and
