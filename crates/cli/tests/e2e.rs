@@ -633,18 +633,34 @@ fn http_get(url: &str) -> (String, Option<String>) {
 }
 
 /// Status line, `Location` and body of a GET.
+///
+/// A server that was just started (rclone's sign-in page) may refuse the
+/// connection or close it without an answer for a moment: retried for a
+/// few seconds.
 fn http_get_body(url: &str) -> (String, Option<String>, String) {
     use std::io::{Read, Write};
     let rest = url.strip_prefix("http://").unwrap();
     let (host, path) = rest.split_once('/').unwrap();
-    let mut stream = std::net::TcpStream::connect(host).unwrap();
-    write!(
-        stream,
-        "GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
+    let attempt = || -> std::io::Result<String> {
+        let mut stream = std::net::TcpStream::connect(host)?;
+        write!(
+            stream,
+            "GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        )?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        Ok(response)
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let response = loop {
+        match attempt() {
+            Ok(response) if !response.is_empty() => break response,
+            result if Instant::now() >= deadline => {
+                panic!("GET {url}: no answer ({result:?})")
+            }
+            _ => std::thread::sleep(Duration::from_millis(200)),
+        }
+    };
     let status = response.lines().next().unwrap_or_default().to_owned();
     let location = response
         .lines()
