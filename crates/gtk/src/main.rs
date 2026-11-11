@@ -8,9 +8,10 @@
 //! window. The agent runs it with `--action NAME [--target VALUE]` for what
 //! needs a window (preferences, signing in again, a question before
 //! quitting); a running instance gets the request. `--background` (the
-//! login entry of older versions) only starts the agent.
+//! login entry of native packages) starts the daemon and the agent, and
+//! ends.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -27,8 +28,8 @@ const DEFAULT_LOCALE_DIR: &str = "/app/share/locale";
 
 thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
-    /// The start is done (daemon reached or not, state loaded).
-    static READY: Cell<bool> = const { Cell::new(false) };
+    /// Closed when the start is done (daemon reached or not, state loaded).
+    static STARTED: RefCell<Option<async_channel::Receiver<()>>> = const { RefCell::new(None) };
 }
 
 fn current_ui() -> Option<Rc<Ui>> {
@@ -97,21 +98,26 @@ fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -
     let request = Request::parse(&args);
     let hold = app.hold();
     let app = app.clone();
+    let started = STARTED.with(|s| s.borrow().clone());
+    // The start brings the daemon and the agent up; a later launch brings
+    // them back (a running window may outlive them: quit from the tray).
+    let later = started
+        .as_ref()
+        .is_none_or(async_channel::Receiver::is_closed);
     glib::spawn_future_local(async move {
         let _hold = hold;
-        while !READY.with(Cell::get) {
-            glib::timeout_future(Duration::from_millis(50)).await;
+        if let Some(started) = started {
+            let _ = started.recv().await;
         }
         let Some(ui) = current_ui() else { return };
-        // A running window may outlive the daemon and the agent (quit from
-        // the tray): each launch brings them back.
         let stopping =
             matches!(&request, Request::Action(name, _) if name == "quit-all" || name == "restart");
-        if !stopping {
+        if later && !stopping {
             ensure_running(&ui).await;
         }
         match request {
-            Request::Background => {}
+            // Login: only the daemon and the agent stay.
+            Request::Background => ui.quit_if_idle(),
             Request::Window => {
                 if ui.accounts().is_empty() {
                     nuage_ui::onboarding::start(&ui);
@@ -137,60 +143,60 @@ fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -
 }
 
 /// Starts the daemon and the tray agent if they do not run. Whether the
-/// daemon answers; if not, the window says why.
+/// daemon answers; if not, the window says why, and the agent is not
+/// started (it would try to start the daemon again, and replace the log
+/// that says why it failed).
 async fn ensure_running(ui: &Rc<Ui>) -> bool {
-    let running = match ui.backend.ensure_daemon().await {
-        Ok(()) => true,
-        Err(e) => {
-            ui.show_disconnected(&e);
-            ui.present();
-            false
-        }
-    };
-    // Exits at once if one already runs.
+    if let Err(e) = ui.backend.ensure_daemon().await {
+        ui.show_disconnected(&e);
+        ui.present();
+        return false;
+    }
     if let Err(e) = nuage_tray::agent::start() {
         tracing::warn!(error = %e, "cannot start the tray agent");
     }
-    running
+    true
 }
 
-/// The icons of a source build (`data/icons`); installed icons are found
-/// in the system icon theme.
-fn source_icon_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
-    dir.is_dir().then_some(dir)
+/// Asks the tray agent to end, and waits (up to 3 s) until it has.
+async fn stop_agent() {
+    nuage_tray::agent::request_stop();
+    for _ in 0..30 {
+        if !nuage_tray::agent::running() {
+            return;
+        }
+        glib::timeout_future(Duration::from_millis(100)).await;
+    }
+    tracing::warn!("the tray agent did not end");
 }
 
 fn startup(app: &adw::Application) {
-    if let (Some(dir), Some(display)) = (source_icon_dir(), gtk::gdk::Display::default()) {
+    if let (Some(dir), Some(display)) =
+        (nuage_tray::source_icon_dir(), gtk::gdk::Display::default())
+    {
         gtk::IconTheme::for_display(&display).add_search_path(dir);
     }
     gtk::Window::set_default_icon_name(nuage_core::APP_ID);
 
+    let (started, started_rx) = async_channel::bounded::<()>(1);
+    STARTED.with(|s| *s.borrow_mut() = Some(started_rx));
     let (backend, events) = match Backend::start() {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "cannot start");
-            READY.with(|r| r.set(true));
             return;
         }
     };
     // The windows hide when closed (they keep their state while the
-    // program runs): it ends when the last visible one closes.
-    app.connect_window_added(|app, window| {
-        let app = app.downgrade();
-        window.connect_close_request(move |_| {
-            if let Some(app) = app.upgrade() {
-                glib::idle_add_local_once(move || {
-                    if !app
-                        .windows()
-                        .iter()
-                        .any(gtk::prelude::WidgetExt::is_visible)
-                    {
-                        app.quit();
-                    }
-                });
-            }
+    // program runs): it ends when the last visible one closes, unless an
+    // account is being set up. Connected before the first window exists.
+    app.connect_window_added(|_, window| {
+        window.connect_close_request(|_| {
+            glib::idle_add_local_once(|| {
+                if let Some(ui) = current_ui() {
+                    ui.quit_if_idle();
+                }
+            });
             glib::Propagation::Proceed
         });
     });
@@ -205,7 +211,7 @@ fn startup(app: &adw::Application) {
             if ensure_running(&ui).await {
                 ui.reload().await;
             }
-            READY.with(|r| r.set(true));
+            drop(started);
         });
     }
 
@@ -340,21 +346,6 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
             }),
         );
     }
-    {
-        let ui = Rc::clone(ui);
-        action("install-update", Box::new(move || ui.install_update()));
-    }
-    // Updates of Nuage itself: offer to install, then to restart.
-    {
-        let ui = Rc::clone(ui);
-        let updates = ui.backend.watch_updates();
-        glib::spawn_future_local(async move {
-            while let Ok(event) = updates.recv().await {
-                tracing::info!(?event, "update of Nuage");
-                ui.update_event(event);
-            }
-        });
-    }
     // Notification button: open a folder.
     let open = gio::SimpleAction::new("open-folder", Some(glib::VariantTy::STRING));
     open.connect_activate(|_, param| {
@@ -369,7 +360,7 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
 /// "quit with pending uploads" setting.
 async fn quit(app: &adw::Application, ui: &Rc<Ui>) {
     if stop_daemon(ui).await {
-        nuage_tray::agent::stop();
+        stop_agent().await;
         app.quit();
     }
 }
@@ -380,7 +371,8 @@ async fn restart(app: &adw::Application, ui: &Rc<Ui>) {
     if !stop_daemon(ui).await {
         return;
     }
-    nuage_tray::agent::stop();
+    // The new version starts its own agent: this one must be gone.
+    stop_agent().await;
     match ui.backend.start_latest_version().await {
         Ok(()) => app.quit(),
         Err(e) => {
