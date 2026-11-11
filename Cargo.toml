@@ -47,7 +47,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 # Plain HTTP only: Nuage talks to rclone on 127.0.0.1. No TLS stack, so no
 # system certificates and no C code to build for static binaries.
 # SQLite compiled in: the static (musl) build needs musl-gcc.
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

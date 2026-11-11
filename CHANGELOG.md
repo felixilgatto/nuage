@@ -10,6 +10,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
   the provider for their content less often, and still sees changes made
   elsewhere within a minute.
 - Nuage wakes up less often when nothing is syncing, which saves battery.
+- Security: Nuage now uses SQLite 3.54, which fixes a flaw in reading
+  damaged database files.
 
 ## [0.2.2] - 2026-11-07
 
