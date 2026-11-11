@@ -132,11 +132,15 @@ impl Inner {
         &self,
         account: &AccountId,
         force: bool,
-        change: impl FnOnce(&mut crate::config::AccountRecord) -> Result<()>,
+        change: impl Fn(&mut crate::config::AccountRecord) -> Result<()>,
     ) -> Result<()> {
         let id = {
             let st = self.state.lock().await;
-            st.record(st.resolve(account)?).account.id.clone()
+            let i = st.resolve(account)?;
+            // A change that cannot be made is refused before asking to
+            // wait for the uploads.
+            change(&mut st.config.accounts[i].clone())?;
+            st.record(i).account.id.clone()
         };
         if !force {
             let pending = self.pending_of(&id).await;
