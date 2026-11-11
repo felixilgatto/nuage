@@ -55,11 +55,22 @@ pub fn claim(wait: Duration) -> std::io::Result<Option<Instance>> {
 }
 
 /// Starts the agent, detached; it exits at once if one already runs. Its
-/// output goes to `nuage-tray.log` next to the daemon's log.
+/// output goes to `nuage-tray.log` next to the daemon's log, appended: a
+/// start that finds an agent running must not empty its log.
 pub fn start() -> std::io::Result<()> {
     let program = crate::daemon::sibling(PROGRAM);
     let log = crate::daemon::log_file().map(|l| l.with_file_name("nuage-tray.log"));
-    let stderr = match log.map(std::fs::File::create) {
+    let append = |path: PathBuf| {
+        // Kept small: the previous megabyte goes to `.old`.
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1_000_000) {
+            let _ = std::fs::rename(&path, path.with_extension("log.old"));
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+    };
+    let stderr = match log.map(append) {
         Some(Ok(file)) => std::process::Stdio::from(file),
         _ => std::process::Stdio::null(),
     };

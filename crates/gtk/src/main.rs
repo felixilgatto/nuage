@@ -103,6 +103,13 @@ fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -
             glib::timeout_future(Duration::from_millis(50)).await;
         }
         let Some(ui) = current_ui() else { return };
+        // A running window may outlive the daemon and the agent (quit from
+        // the tray): each launch brings them back.
+        let stopping =
+            matches!(&request, Request::Action(name, _) if name == "quit-all" || name == "restart");
+        if !stopping {
+            ensure_running(&ui).await;
+        }
         match request {
             Request::Background => {}
             Request::Window => {
@@ -127,6 +134,24 @@ fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -
         }
     });
     glib::ExitCode::SUCCESS
+}
+
+/// Starts the daemon and the tray agent if they do not run. Whether the
+/// daemon answers; if not, the window says why.
+async fn ensure_running(ui: &Rc<Ui>) -> bool {
+    let running = match ui.backend.ensure_daemon().await {
+        Ok(()) => true,
+        Err(e) => {
+            ui.show_disconnected(&e);
+            ui.present();
+            false
+        }
+    };
+    // Exits at once if one already runs.
+    if let Err(e) = nuage_tray::agent::start() {
+        tracing::warn!(error = %e, "cannot start the tray agent");
+    }
+    running
 }
 
 /// The icons of a source build (`data/icons`); installed icons are found
@@ -177,14 +202,8 @@ fn startup(app: &adw::Application) {
     {
         let ui = Rc::clone(&ui);
         glib::spawn_future_local(async move {
-            if let Err(e) = ui.backend.ensure_daemon().await {
-                ui.show_disconnected(&e);
-                ui.present();
-            } else {
+            if ensure_running(&ui).await {
                 ui.reload().await;
-            }
-            if let Err(e) = nuage_tray::agent::start() {
-                tracing::warn!(error = %e, "cannot start the tray agent");
             }
             READY.with(|r| r.set(true));
         });
