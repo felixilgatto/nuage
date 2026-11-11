@@ -1544,9 +1544,17 @@ dependencies = [
 name = "nuage-tray"
 version = "0.2.3"
 dependencies = [
+ "ashpd",
+ "async-channel",
+ "futures-util",
  "gettext-rs",
  "ksni",
  "nuage-core",
+ "nuage-ipc",
+ "rustix",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1561,6 +1569,7 @@ dependencies = [
  "libadwaita",
  "nuage-core",
  "nuage-ipc",
+ "nuage-tray",
  "tokio",
  "tracing",
 ]
