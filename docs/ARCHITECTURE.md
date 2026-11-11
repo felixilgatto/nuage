@@ -16,7 +16,8 @@ exclusions and, in v1.1, offline pinning.
 ```
 nuaged  (daemon: engine + rclone rcd)
    ▲  Unix socket, newline-delimited JSON (Command / Event)
-   ├─ nuage-gtk   desktop app: window + tray icon
+   ├─ nuage-tray  desktop agent: tray icon, notifications, updates (no GTK)
+   ├─ nuage-gtk   desktop app: the window, ends with it
    └─ nuage       CLI (humans, scripts, agents)
 ```
 
@@ -40,9 +41,9 @@ nuaged  (daemon: engine + rclone rcd)
 | `crates/fuse-relay` | `nuage-fuse-relay` | binary run on the host by the Flatpak's `fusermount3` wrapper |
 | `crates/daemon` | `nuaged` | binary: engine + IPC server |
 | `crates/cli` | `nuage` | binary: CLI (clap), IPC client |
-| `crates/tray` | `nuage-tray` | StatusNotifierItem icon (ksni) |
+| `crates/tray` | `nuage-tray` | binary: desktop agent (StatusNotifierItem icon with ksni, notifications, updates); library shared with the window |
 | `crates/ui` | `nuage-ui` | GTK 4 + libadwaita interface |
-| `crates/gtk` | `nuage-gtk` | binary: assembles ui + tray |
+| `crates/gtk` | `nuage-gtk` | binary: the window, assembles ui |
 
 ### Dependency rules
 
@@ -54,7 +55,8 @@ Checked in CI by `scripts/check-deps.sh`:
 | `ipc`, `providers`, `rclone-rc`, `fs` | `core` |
 | `engine` | `core`, `rclone-rc`, `providers`, `fs` |
 | `daemon` | `engine`, `ipc`, `core` |
-| `cli`, `ui`, `tray` | `core`, `ipc` — never `engine` or `rclone-rc` |
+| `cli`, `tray` | `core`, `ipc` — never `engine` or `rclone-rc` |
+| `ui` | `core`, `ipc`, `tray` |
 | `gtk` | `core`, `ipc`, `ui`, `tray` |
 | `fuse-relay` | no project crate |
 
@@ -335,9 +337,24 @@ jobs polled with `job/status`, so no HTTP timeout cuts them.
 
 ## Desktop application
 
-`nuage-gtk` (crates `gtk`, `ui`, `tray`) is a client of `nuaged` like the
-CLI; it starts the daemon if it does not answer (next to its executable,
-then `PATH`; log in the user data folder) and never stops it on close.
+Two processes, clients of `nuaged` like the CLI:
+
+- `nuage-tray` (crate `tray`, no GTK, about 10 MB) stays running: it starts
+  the daemon if it does not answer (next to its executable, then `PATH`;
+  log in the user data folder) and again if it crashes (at most once a
+  minute), shows the tray icon, sends the desktop notifications
+  (Notification portal) and offers the updates of Nuage (update monitor
+  portal). One per session: a lock next to the daemon's socket holds its
+  PID. It ends when the daemon stops. What needs a window (preferences,
+  signing in again, adding an account, the question before quitting with
+  pending uploads, restarting after an update) runs `nuage-gtk --action
+  NAME [--target VALUE]`; a running window gets the request (GApplication
+  command line). Refresh, pause, resume, opening a folder and quitting
+  without a question are done by the agent itself.
+- `nuage-gtk` (crates `gtk`, `ui`) is the window. It starts the daemon and
+  the agent, and ends when its window closes (GTK and libadwaita take
+  about 65 MB more: they are only in memory while the window is open).
+  Quit and Restart stop the daemon, then the agent (`agent::stop`).
 
 - `nuage_ui::Backend`: a thread with a tokio runtime runs the IPC client;
   the GTK code awaits its answers through `async-channel`, and receives the
@@ -351,8 +368,7 @@ then `PATH`; log in the user data folder) and never stops it on close.
   Nothing provider-specific is in the interface: the client guide, the client
   ID format and the form come from `ProviderInfo`.
 - Main window: accounts with state, quota and "Open folder"; "+"; menu
-  (About, Quit). Closing it hides it. Launched by the user, the application
-  opens it; `--background` (login) does not when the tray shows.
+  (About, Quit). Closing it ends `nuage-gtk`; the agent stays.
 - File browser (`ui/browser.rs`), opened from an account row, its own
   window: `AdwNavigationSplitView` with the accounts (quota bars) and the
   folder; breadcrumb, filter, new folder, upload, list (`GtkColumnView`,
@@ -365,12 +381,17 @@ then `PATH`; log in the user data folder) and never stops it on close.
   browser, native documents in the web browser (`GtkUriLauncher`), files
   from the mounted folder, or from a downloaded copy when unmounted or
   excluded. A folder with uploads in progress is listed again every 3 s.
-- Tray (`ksni`, StatusNotifierItem): aggregated state icon; menu with each
-  account's state, quota and cache, Open Nuage, Open Folder, Refresh,
-  Pause/Resume Uploads, Add Account, Quit. Without a StatusNotifierWatcher
-  (GNOME without the AppIndicator extension), the window is shown instead
-  and closing it quits the application (the daemon keeps running).
-- Start at login (`nuage-gtk --background`), asked at the last setup screen
+- Tray (`ksni`, StatusNotifierItem, in the agent): aggregated state icon;
+  menu with each account's state, quota and cache, Open Nuage, Open
+  Folder, Refresh, Pause/Resume Uploads, Add Account, Quit. Without a
+  StatusNotifierWatcher (GNOME without the AppIndicator extension), the
+  agent opens the window when it starts, and keeps running without an icon
+  (notifications, restarting the daemon).
+- Translations: the agent does not call `setlocale` (`unsafe`, forbidden in
+  the workspace): its strings stay in English until translations exist and
+  a safe way is found.
+- Start at login (`nuage-tray`; `nuage-gtk --background` from older
+  versions only starts the agent), asked at the last setup screen
   of the first account and switched in the preferences: in the Flatpak, the
   Background portal; outside of it (the portal refuses unsandboxed
   applications), an entry in `~/.config/autostart/`.
@@ -439,8 +460,8 @@ Design: `docs/research/2026-11-01-milestone-12.md`.
 
 - `rclone`: the official archive, pinned by sha256 (x86_64, aarch64), and
   its license.
-- `nuage`: an offline `cargo build --release` of `nuaged`, `nuage` and
-  `nuage-gtk` from the vendored crates of `cargo-sources.json`
+- `nuage`: an offline `cargo build --release` of `nuaged`, `nuage`,
+  `nuage-gtk` and `nuage-tray` from the vendored crates of `cargo-sources.json`
   (`scripts/cargo-sources.py`, from `Cargo.lock`; CI checks it is current);
   `nuage-fuse-relay` linked statically (it runs on the host); the
   `fusermount3` wrapper; the desktop entry, metainfo and icons of `data/`.

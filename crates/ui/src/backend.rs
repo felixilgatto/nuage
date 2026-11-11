@@ -21,28 +21,7 @@ pub enum BackendEvent {
     Event(Event),
 }
 
-/// What the Flatpak update monitor reports about Nuage itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateEvent {
-    /// A newer version is available in the repository, not installed yet.
-    Available,
-    /// A newer version is installed: this instance and its daemon keep
-    /// running the old one until restarted.
-    Installed,
-    /// Installing the update failed, with the portal's message.
-    Failed(String),
-}
-
-/// What a commit triple of `UpdateAvailable` means.
-fn classify_update(running: &str, local: &str, remote: &str) -> Option<UpdateEvent> {
-    if !local.is_empty() && local != running {
-        Some(UpdateEvent::Installed)
-    } else if !remote.is_empty() && remote != running {
-        Some(UpdateEvent::Available)
-    } else {
-        None
-    }
-}
+pub use nuage_tray::updates::UpdateEvent;
 
 /// An answer, or why there is none.
 pub type Answer = Result<Reply, String>;
@@ -161,50 +140,9 @@ impl Backend {
     /// stop the synchronisation. It is looked for next to this program,
     /// then in `PATH`.
     pub async fn ensure_daemon(&self) -> Result<(), String> {
-        if self.daemon_running().await {
-            return Ok(());
-        }
-        let program = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("nuaged")))
-            .filter(|p| p.is_file())
-            .unwrap_or_else(|| PathBuf::from("nuaged"));
-        let log = log_file();
-        let started = self
-            .run(async move {
-                // The log of the previous run is kept: it says why it stopped.
-                if let Some(log) = &log {
-                    let _ = std::fs::rename(log, log.with_extension("log.old"));
-                }
-                let stderr = match log.as_ref().map(std::fs::File::create) {
-                    Some(Ok(file)) => std::process::Stdio::from(file),
-                    _ => std::process::Stdio::null(),
-                };
-                tokio::process::Command::new(&program)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(stderr)
-                    // The daemon outlives the application.
-                    .kill_on_drop(false)
-                    .spawn()
-                    .map(drop)
-                    .map_err(|e| format!("Cannot start {}: {e}", program.display()))
-            })
-            .await;
-        started?;
-        for _ in 0..100 {
-            if self.daemon_running().await {
-                return Ok(());
-            }
-            glib_sleep(Duration::from_millis(100)).await;
-        }
-        Err(match log_file() {
-            Some(log) => format!(
-                "The Nuage service did not start. Its log is in {}.",
-                log.display()
-            ),
-            None => "The Nuage service did not start.".to_owned(),
-        })
+        let sockets = self.sockets.clone();
+        self.run(async move { nuage_tray::daemon::ensure(&sockets, &client_name()).await })
+            .await
     }
 
     /// Starts the application at login, or stops doing so. Returns whether
@@ -221,7 +159,8 @@ impl Backend {
             let request = ashpd::desktop::background::Background::request()
                 .reason("Keep your cloud folders mounted and synchronised.")
                 .auto_start(enable)
-                .command(["nuage-gtk", "--background"])
+                // The tray agent only: no window, and no GTK, at login.
+                .command([nuage_tray::agent::PROGRAM])
                 .dbus_activatable(false)
                 .send()
                 .await
@@ -244,7 +183,7 @@ impl Backend {
         let backend = self.clone();
         gtk::glib::spawn_future_local(async move {
             let result = backend
-                .run(async move { monitor_updates(tx, install).await })
+                .run(async move { nuage_tray::updates::monitor(tx, install).await })
                 .await;
             if let Err(e) = result {
                 tracing::info!(error = %e, "no update monitor");
@@ -292,60 +231,6 @@ const RELAUNCH: &str = concat!(
     "| grep -q true || break; sleep 0.5; done; exec nuage-gtk"
 );
 
-/// Runs the Flatpak update monitor until it closes.
-async fn monitor_updates(
-    tx: async_channel::Sender<UpdateEvent>,
-    install: async_channel::Receiver<()>,
-) -> Result<(), String> {
-    use ashpd::flatpak::{Flatpak, UpdateStatus};
-    use futures_util::StreamExt;
-    let flatpak = Flatpak::new().await.map_err(message)?;
-    let monitor = flatpak.create_update_monitor().await.map_err(message)?;
-    let mut available = monitor.receive_update_available().await.map_err(message)?;
-    let mut progress = monitor.receive_progress().await.map_err(message)?;
-    loop {
-        tokio::select! {
-            info = available.next() => {
-                let Some(info) = info else { break };
-                tracing::info!(
-                    running = info.running_commit(),
-                    local = info.local_commit(),
-                    remote = info.remote_commit(),
-                    "update monitor"
-                );
-                let event = classify_update(
-                    info.running_commit(),
-                    info.local_commit(),
-                    info.remote_commit(),
-                );
-                if let Some(event) = event {
-                    let _ = tx.send(event).await;
-                }
-            }
-            p = progress.next() => {
-                let Some(p) = p else { break };
-                let event = match p.status {
-                    Some(UpdateStatus::Done) => UpdateEvent::Installed,
-                    Some(UpdateStatus::Failed) => UpdateEvent::Failed(
-                        p.error_message.or(p.error).unwrap_or_default(),
-                    ),
-                    _ => continue,
-                };
-                let _ = tx.send(event).await;
-            }
-            request = install.recv() => {
-                if request.is_err() {
-                    break;
-                }
-                if let Err(e) = monitor.update(None).await {
-                    let _ = tx.send(UpdateEvent::Failed(e.to_string())).await;
-                }
-            }
-        }
-    }
-    Err("the update monitor closed".to_owned())
-}
-
 fn in_flatpak() -> bool {
     std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists()
 }
@@ -386,12 +271,7 @@ fn set_autostart_entry(enable: bool) -> Result<(), String> {
     std::fs::write(&path, entry).map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
 
-/// Where the daemon started by the application writes its log.
-pub fn log_file() -> Option<PathBuf> {
-    let dir = gtk::glib::user_data_dir().join("nuage");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("nuaged.log"))
-}
+pub use nuage_tray::daemon::log_file;
 
 /// Sleeps on the GLib main loop.
 pub async fn glib_sleep(duration: Duration) {
@@ -443,22 +323,5 @@ async fn forward_events(sockets: Vec<PathBuf>, tx: async_channel::Sender<Backend
             connected = None;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{UpdateEvent, classify_update};
-
-    #[test]
-    fn update_states() {
-        // Nothing new.
-        assert_eq!(classify_update("a", "a", "a"), None);
-        assert_eq!(classify_update("a", "a", ""), None);
-        // In the repository only.
-        assert_eq!(classify_update("a", "a", "b"), Some(UpdateEvent::Available));
-        // Installed while running, whatever the repository has.
-        assert_eq!(classify_update("a", "b", "b"), Some(UpdateEvent::Installed));
-        assert_eq!(classify_update("a", "b", "c"), Some(UpdateEvent::Installed));
     }
 }

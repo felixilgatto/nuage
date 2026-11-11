@@ -58,7 +58,7 @@ modules:
         CARGO_HOME: /run/build/nuage/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo build --release --offline --locked -p nuaged -p nuage -p nuage-gtk
+      - cargo build --release --offline --locked -p nuaged -p nuage -p nuage-gtk -p nuage-tray
       # Runs on the host (see the wrapper): linked statically, so that it
       # does not depend on the host's libraries. The SDK has every static
       # glibc library but libm.a, which the relay does not use (Rust's std
@@ -69,7 +69,7 @@ modules:
         cargo build --release --offline --locked -p nuage-fuse-relay
         --target "$(rustc -vV | sed -n 's/^host: //p')"
         --target-dir target/relay
-      - install -Dm755 -t /app/bin target/release/nuaged target/release/nuage target/release/nuage-gtk
+      - install -Dm755 -t /app/bin target/release/nuaged target/release/nuage target/release/nuage-gtk target/release/nuage-tray
       - install -Dm755 target/relay/*/release/nuage-fuse-relay /app/bin/nuage-fuse-relay
       - install -Dm755 build-aux/flatpak/fusermount-wrapper.sh /app/bin/fusermount3
       - install -Dm644 data/io.github.felixilgatto.Nuage.desktop -t /app/share/applications

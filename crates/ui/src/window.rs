@@ -29,8 +29,6 @@ pub struct Ui {
 pub(crate) struct UiState {
     pub(crate) report: Option<StatusReport>,
     pub(crate) providers: Vec<ProviderInfo>,
-    /// The system tray shows the icon: the window can close after setup.
-    pub(crate) tray: bool,
     /// Created the first time it is opened.
     pub(crate) browser: Option<Rc<crate::browser::Browser>>,
     /// Where the update of Nuage itself stands, and its toast.
@@ -48,7 +46,8 @@ pub(crate) enum UpdateNotice {
     Installed,
 }
 
-/// ID of the notification about an update of Nuage.
+/// ID of the notification about an update of Nuage, sent by the tray
+/// agent: installing from the window withdraws it.
 const UPDATE_NOTIFICATION: &str = "update";
 
 /// A short, human state line.
@@ -184,48 +183,30 @@ impl Ui {
     }
 
     /// A newer version is in the repository: offer to install it (a toast
-    /// that stays, and a notification, since the window is often closed).
+    /// that stays; the tray agent sends the notification).
     fn update_available(&self) {
-        let text = gettext("A new version of Nuage is available");
         self.show_update_toast(
             adw::Toast::builder()
-                .title(&text)
+                .title(gettext("A new version of Nuage is available"))
                 .button_label(gettext("Update"))
                 .action_name("app.install-update")
                 .timeout(0)
                 .build(),
         );
-        let notification = gio::Notification::new(&text);
-        notification.set_body(Some(&gettext(
-            "Update now, or later from Software. Your folders stay mounted while it downloads.",
-        )));
-        notification.set_default_action("app.open-window");
-        notification.add_button(&gettext("Update"), "app.install-update");
-        self.app
-            .send_notification(Some(UPDATE_NOTIFICATION), &notification);
         self.state.borrow_mut().update = UpdateNotice::Available;
     }
 
-    /// A newer version is installed: offer to restart (a toast that stays,
-    /// and a notification, since the window is often closed).
+    /// A newer version is installed: offer to restart (a toast that stays;
+    /// the tray agent sends the notification).
     fn update_installed(&self) {
-        let text = gettext("A new version of Nuage is installed");
         self.show_update_toast(
             adw::Toast::builder()
-                .title(&text)
+                .title(gettext("A new version of Nuage is installed"))
                 .button_label(gettext("Restart"))
                 .action_name("app.restart")
                 .timeout(0)
                 .build(),
         );
-        let notification = gio::Notification::new(&text);
-        notification.set_body(Some(&gettext(
-            "Restart Nuage to use it. Your folders are unmounted for a moment.",
-        )));
-        notification.set_default_action("app.open-window");
-        notification.add_button(&gettext("Restart"), "app.restart");
-        self.app
-            .send_notification(Some(UPDATE_NOTIFICATION), &notification);
         self.state.borrow_mut().update = UpdateNotice::Installed;
     }
 
@@ -235,21 +216,8 @@ impl Ui {
         tracing::warn!(error, "cannot install the update");
         let text = gettext("Nuage could not update itself. Update it from Software instead.");
         self.show_update_toast(adw::Toast::builder().title(&text).timeout(0).build());
-        let notification = gio::Notification::new(&gettext("Nuage could not update itself"));
-        notification.set_body(Some(&gettext("Update it from Software instead.")));
-        notification.set_default_action("app.open-window");
-        self.app
-            .send_notification(Some(UPDATE_NOTIFICATION), &notification);
         // Offered again if the monitor reports the update again.
         self.state.borrow_mut().update = UpdateNotice::None;
-    }
-
-    pub fn set_tray_available(&self, available: bool) {
-        self.state.borrow_mut().tray = available;
-    }
-
-    pub fn tray_available(&self) -> bool {
-        self.state.borrow().tray
     }
 
     /// Shows the window, at the accounts list.

@@ -22,7 +22,7 @@ declare -A ALLOWED=(
     [nuage-engine]="nuage-core nuage-rclone nuage-providers nuage-fs"
     [nuaged]="nuage-engine nuage-ipc nuage-core"
     [nuage]="nuage-core nuage-ipc"
-    [nuage-ui]="nuage-core nuage-ipc"
+    [nuage-ui]="nuage-core nuage-ipc nuage-tray"
     [nuage-tray]="nuage-core nuage-ipc"
     [nuage-gtk]="nuage-core nuage-ipc nuage-ui nuage-tray"
 )

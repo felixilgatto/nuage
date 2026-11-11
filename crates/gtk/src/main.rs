@@ -1,9 +1,14 @@
-//! `nuage-gtk`: the Nuage desktop application (window + tray icon).
+//! `nuage-gtk`: the Nuage window.
 //!
-//! A client of `nuaged`, which it starts if needed. Launched by the user,
-//! it opens the setup (no account yet) or the main window; closing the
-//! window leaves it in the system tray. `--background` (used to start at
-//! login) opens nothing when the tray is available.
+//! A client of `nuaged`, which it starts if needed, and of the tray agent
+//! (`nuage-tray`), which it starts too: the agent stays running (icon,
+//! notifications, updates) and this program ends with its window.
+//!
+//! Launched by the user, it opens the setup (no account yet) or the main
+//! window. The agent runs it with `--action NAME [--target VALUE]` for what
+//! needs a window (preferences, signing in again, a question before
+//! quitting); a running instance gets the request. `--background` (the
+//! login entry of older versions) only starts the agent.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -14,18 +19,16 @@ use adw::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
 
-use nuage_core::{AccountId, Command, Event, StatusReport};
-use nuage_tray::{NuageTray, TrayAction};
+use nuage_core::{AccountId, Command, Event};
 use nuage_ui::{Backend, BackendEvent, Ui};
-
-/// Minimum delay between two restarts of a crashed daemon.
-const RESTART_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Where translations are installed (overridable for development).
 const DEFAULT_LOCALE_DIR: &str = "/app/share/locale";
 
 thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
+    /// The start is done (daemon reached or not, state loaded).
+    static READY: Cell<bool> = const { Cell::new(false) };
 }
 
 fn current_ui() -> Option<Rc<Ui>> {
@@ -44,27 +47,86 @@ fn main() -> glib::ExitCode {
         std::env::var("NUAGE_LOCALE_DIR").unwrap_or_else(|_| DEFAULT_LOCALE_DIR.to_owned());
     nuage_ui::init_i18n(&locale_dir);
 
-    let mut args: Vec<String> = std::env::args().collect();
-    let background = args.iter().any(|a| a == "--background");
-    args.retain(|a| a != "--background");
-
     let app = adw::Application::builder()
         .application_id(nuage_core::APP_ID)
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
+    app.connect_startup(startup);
+    app.connect_command_line(command_line);
+    app.run()
+}
 
-    // The first activation is decided by `startup`; later ones (the user
-    // launches the application again) show the window.
-    let first = Rc::new(Cell::new(true));
-    app.connect_activate(move |_| {
-        if first.replace(false) {
-            return;
+/// What a launch asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Request {
+    /// The window (or the setup, without accounts).
+    Window,
+    /// Only make sure the daemon and the agent run.
+    Background,
+    /// An application action, with its string target if any.
+    Action(String, Option<String>),
+}
+
+impl Request {
+    fn parse(args: &[String]) -> Self {
+        let value = |name: &str| {
+            args.iter()
+                .position(|a| a == name)
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+        };
+        if let Some(action) = value("--action") {
+            Self::Action(action, value("--target"))
+        } else if args.iter().any(|a| a == "--background") {
+            Self::Background
+        } else {
+            Self::Window
         }
-        if let Some(ui) = current_ui() {
-            ui.present();
+    }
+}
+
+/// Every launch, the first one included. The request is served once the
+/// start is done; the application is held meanwhile.
+fn command_line(app: &adw::Application, cmdline: &gio::ApplicationCommandLine) -> glib::ExitCode {
+    let args: Vec<String> = cmdline
+        .arguments()
+        .iter()
+        .skip(1)
+        .filter_map(|a| a.to_str().map(str::to_owned))
+        .collect();
+    let request = Request::parse(&args);
+    let hold = app.hold();
+    let app = app.clone();
+    glib::spawn_future_local(async move {
+        let _hold = hold;
+        while !READY.with(Cell::get) {
+            glib::timeout_future(Duration::from_millis(50)).await;
+        }
+        let Some(ui) = current_ui() else { return };
+        match request {
+            Request::Background => {}
+            Request::Window => {
+                if ui.accounts().is_empty() {
+                    nuage_ui::onboarding::start(&ui);
+                } else {
+                    ui.present();
+                }
+            }
+            // Held until done: they may end without a window.
+            Request::Action(name, _) if name == "quit-all" => quit(&app, &ui).await,
+            Request::Action(name, _) if name == "restart" => restart(&app, &ui).await,
+            Request::Action(name, target) => {
+                let target = target.map(|t| t.to_variant());
+                if app.lookup_action(&name).is_some() {
+                    app.activate_action(&name, target.as_ref());
+                } else {
+                    tracing::warn!(name, "unknown action");
+                    ui.present();
+                }
+            }
         }
     });
-    app.connect_startup(move |app| startup(app, background));
-    app.run_with_args(&args)
+    glib::ExitCode::SUCCESS
 }
 
 /// The icons of a source build (`data/icons`); installed icons are found
@@ -74,9 +136,8 @@ fn source_icon_dir() -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
-fn startup(app: &adw::Application, background: bool) {
-    let icon_dir = source_icon_dir();
-    if let (Some(dir), Some(display)) = (&icon_dir, gtk::gdk::Display::default()) {
+fn startup(app: &adw::Application) {
+    if let (Some(dir), Some(display)) = (source_icon_dir(), gtk::gdk::Display::default()) {
         gtk::IconTheme::for_display(&display).add_search_path(dir);
     }
     gtk::Window::set_default_icon_name(nuage_core::APP_ID);
@@ -85,6 +146,7 @@ fn startup(app: &adw::Application, background: bool) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "cannot start");
+            READY.with(|r| r.set(true));
             return;
         }
     };
@@ -92,123 +154,34 @@ fn startup(app: &adw::Application, background: bool) {
     UI.with(|u| *u.borrow_mut() = Some(Rc::clone(&ui)));
     add_actions(app, &ui);
 
-    // Keep running with the window closed while the tray icon shows.
-    let hold = Rc::new(RefCell::new(Some(app.hold())));
-    {
-        let (app, ui2, hold) = (app.clone(), Rc::clone(&ui), Rc::clone(&hold));
-        ui.window.connect_close_request(move |_| {
-            if !ui2.tray_available() {
-                hold.borrow_mut().take();
-                app.quit();
-            }
-            glib::Propagation::Proceed
-        });
-    }
-
-    let (tray_actions_tx, tray_actions) = async_channel::unbounded::<TrayAction>();
-    let (tray_status, tray_status_rx) = async_channel::unbounded::<Option<StatusReport>>();
-    let (tray_ok_tx, tray_ok) = async_channel::bounded::<bool>(1);
-    start_tray(tray_actions_tx, tray_status_rx, tray_ok_tx, icon_dir);
-
-    // Startup: daemon, tray, then window or not.
+    // Start: daemon, agent, state.
     {
         let ui = Rc::clone(&ui);
         glib::spawn_future_local(async move {
             if let Err(e) = ui.backend.ensure_daemon().await {
                 ui.show_disconnected(&e);
                 ui.present();
-                return;
-            }
-            let tray = glib::future_with_timeout(Duration::from_secs(3), tray_ok.recv())
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .unwrap_or(false);
-            ui.set_tray_available(tray);
-            ui.reload().await;
-            if background && tray {
-                return;
-            }
-            if ui.accounts().is_empty() {
-                nuage_ui::onboarding::start(&ui);
             } else {
-                ui.present();
+                ui.reload().await;
             }
+            if let Err(e) = nuage_tray::agent::start() {
+                tracing::warn!(error = %e, "cannot start the tray agent");
+            }
+            READY.with(|r| r.set(true));
         });
     }
 
-    // Events from the daemon.
+    // Events from the daemon. A crashed daemon is started again by the
+    // agent.
     {
-        let (ui, tray_status) = (Rc::clone(&ui), tray_status.clone());
+        let ui = Rc::clone(&ui);
         glib::spawn_future_local(async move {
-            // A daemon that was connected and goes away without saying it
-            // stops has crashed: it is started again, at most once a minute
-            // (a daemon that cannot start is not started in a loop).
-            let mut connected = false;
-            let mut stopping = false;
-            let mut last_restart: Option<std::time::Instant> = None;
             while let Ok(event) = events.recv().await {
                 match event {
-                    BackendEvent::Connected => {
-                        (connected, stopping) = (true, false);
-                        ui.reload().await;
-                        let _ = tray_status.send(ui.status()).await;
-                    }
-                    BackendEvent::Disconnected(message) => {
-                        let crashed = std::mem::take(&mut connected) && !stopping;
-                        let _ = tray_status.send(None).await;
-                        if crashed && last_restart.is_none_or(|t| t.elapsed() > RESTART_INTERVAL) {
-                            tracing::warn!("the Nuage service stopped; starting it again");
-                            last_restart = Some(std::time::Instant::now());
-                            if ui.backend.ensure_daemon().await.is_ok() {
-                                continue;
-                            }
-                        }
-                        ui.show_disconnected(&message);
-                    }
-                    BackendEvent::Event(Event::StatusChanged { status }) => {
-                        let _ = tray_status.send(Some(status.clone())).await;
-                        ui.show_status(status);
-                    }
-                    BackendEvent::Event(Event::DaemonStopping) => {
-                        stopping = true;
-                        let _ = tray_status.send(None).await;
-                    }
-                    BackendEvent::Event(
-                        event @ (Event::AuthRequired { .. }
-                        | Event::UploadFailed { .. }
-                        | Event::CacheFull { .. }
-                        | Event::OfflineSpaceWarning { .. }
-                        | Event::PinStateChanged {
-                            state: nuage_core::PinState::Conflict,
-                            ..
-                        }),
-                    ) => notify(&ui, &event),
+                    BackendEvent::Connected => ui.reload().await,
+                    BackendEvent::Disconnected(message) => ui.show_disconnected(&message),
+                    BackendEvent::Event(Event::StatusChanged { status }) => ui.show_status(status),
                     BackendEvent::Event(_) => {}
-                }
-            }
-        });
-    }
-
-    // Tray menu.
-    {
-        let app = app.clone();
-        glib::spawn_future_local(async move {
-            let _hold = hold;
-            while let Ok(action) = tray_actions.recv().await {
-                match action {
-                    TrayAction::OpenWindow => {
-                        if let Some(ui) = current_ui() {
-                            ui.present();
-                        }
-                    }
-                    TrayAction::OpenFolder(path) => open_folder(&path),
-                    TrayAction::Refresh => app.activate_action("refresh", None),
-                    TrayAction::PauseAll => app.activate_action("pause-all", None),
-                    TrayAction::ResumeAll => app.activate_action("resume-all", None),
-                    TrayAction::AddAccount => app.activate_action("add-account", None),
-                    TrayAction::Preferences => app.activate_action("preferences", None),
-                    TrayAction::Quit => app.activate_action("quit-all", None),
                 }
             }
         });
@@ -349,19 +322,22 @@ fn add_actions(app: &adw::Application, ui: &Rc<Ui>) {
     app.add_action(&open);
 }
 
-/// "Quit": stops the application and the daemon, following the "quit with
-/// pending uploads" setting.
+/// "Quit": stops the application, the agent and the daemon, following the
+/// "quit with pending uploads" setting.
 async fn quit(app: &adw::Application, ui: &Rc<Ui>) {
     if stop_daemon(ui).await {
+        nuage_tray::agent::stop();
         app.quit();
     }
 }
 
-/// "Restart" after an update: quits, and the newest version starts.
+/// "Restart" after an update: quits, and the newest version starts (with
+/// its own agent).
 async fn restart(app: &adw::Application, ui: &Rc<Ui>) {
     if !stop_daemon(ui).await {
         return;
     }
+    nuage_tray::agent::stop();
     match ui.backend.start_latest_version().await {
         Ok(()) => app.quit(),
         Err(e) => {
@@ -404,135 +380,27 @@ async fn stop_daemon(ui: &Rc<Ui>) -> bool {
     }
 }
 
-/// Runs the tray icon on its own thread with a small tokio runtime. Says on
-/// `available` whether a system tray shows it.
-fn start_tray(
-    actions: async_channel::Sender<TrayAction>,
-    status: async_channel::Receiver<Option<StatusReport>>,
-    available: async_channel::Sender<bool>,
-    icon_dir: Option<PathBuf>,
-) {
-    let spawned = std::thread::Builder::new()
-        .name("tray".into())
-        .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    tracing::warn!(error = %e, "cannot start the tray runtime");
-                    let _ = available.send_blocking(false);
-                    return;
-                }
-            };
-            runtime.block_on(async move {
-                let mut tray = NuageTray::new(move |action| {
-                    let _ = actions.send_blocking(action);
-                });
-                if let Some(dir) = icon_dir {
-                    tray = tray.with_icon_theme_path(dir.to_string_lossy());
-                }
-                match tray.spawn().await {
-                    Ok(handle) => {
-                        let _ = available.send(true).await;
-                        while let Ok(report) = status.recv().await {
-                            handle.update(|t| t.set_status(report)).await;
-                        }
-                        std::future::pending::<()>().await
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "no system tray available");
-                        let _ = available.send(false).await;
-                    }
-                }
-            });
-        });
-    if let Err(e) = spawned {
-        tracing::warn!(error = %e, "cannot start the tray thread");
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::Request;
 
-/// Desktop notifications (Notification portal) for what needs the user.
-fn notify(ui: &Ui, event: &Event) {
-    let name = |id: &AccountId| {
-        ui.accounts()
-            .into_iter()
-            .find(|a| &a.account.id == id)
-            .map_or_else(|| id.as_str().to_owned(), |a| a.account.display_name)
-    };
-    let (key, notification) = match event {
-        Event::AuthRequired { account } => {
-            let n = gio::Notification::new(
-                &gettext("Sign in to {} again").replace("{}", &name(account)),
-            );
-            n.set_body(Some(&gettext(
-                "Its access expired or was revoked: files are not synced until you sign in.",
-            )));
-            n.set_priority(gio::NotificationPriority::High);
-            let target = account.as_str().to_variant();
-            n.add_button_with_target_value(&gettext("Sign In"), "app.reconnect", Some(&target));
-            n.set_default_action_and_target_value("app.reconnect", Some(&target));
-            (format!("auth-{account}"), n)
-        }
-        Event::UploadFailed {
-            account, message, ..
-        } => {
-            let n = gio::Notification::new(&gettext("Some files could not be uploaded"));
-            n.set_body(Some(message));
-            n.set_default_action("app.open-window");
-            (format!("upload-{account}"), n)
-        }
-        Event::CacheFull { account } => {
-            let n = gio::Notification::new(&gettext("The disk is full"));
-            n.set_body(Some(
-                &gettext(
-                    "Files of {} cannot be cached or uploaded. Free some space, or lower its cache limit.",
-                )
-                .replace("{}", &name(account)),
-            ));
-            n.add_button_with_target_value(
-                &gettext("Settings"),
-                "app.account-preferences",
-                Some(&account.as_str().to_variant()),
-            );
-            (format!("cache-{account}"), n)
-        }
-        Event::OfflineSpaceWarning {
-            account,
-            used,
-            limit,
-        } => {
-            let n = gio::Notification::new(&gettext("Offline items take a lot of space"));
-            n.set_body(Some(
-                &gettext(
-                    "{account} keeps {used} on this computer (warning above {limit}). Remove offline copies you no longer need.",
-                )
-                .replace("{account}", &name(account))
-                .replace("{used}", &nuage_ui::human_size(*used))
-                .replace("{limit}", &nuage_ui::human_size(*limit)),
-            ));
-            n.add_button_with_target_value(
-                &gettext("Settings"),
-                "app.account-preferences",
-                Some(&account.as_str().to_variant()),
-            );
-            (format!("offline-space-{account}"), n)
-        }
-        Event::PinStateChanged { account, path, .. } => {
-            let n = gio::Notification::new(&gettext("A file changed in two places"));
-            n.set_body(Some(
-                &gettext(
-                    "{file} was changed on this computer and in {account}. Both versions are kept: yours is now “{copy}”.",
-                )
-                .replace("{file}", path.split(" (conflict ").next().unwrap_or(path))
-                .replace("{account}", &name(account))
-                .replace("{copy}", path.rsplit('/').next().unwrap_or(path)),
-            ));
-            n.set_default_action("app.open-window");
-            (format!("conflict-{account}-{path}"), n)
-        }
-        _ => return,
-    };
-    ui.app.send_notification(Some(&key), &notification);
+    fn parse(args: &[&str]) -> Request {
+        Request::parse(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn requests() {
+        assert_eq!(parse(&[]), Request::Window);
+        assert_eq!(parse(&["--background"]), Request::Background);
+        assert_eq!(
+            parse(&["--action", "preferences"]),
+            Request::Action("preferences".into(), None)
+        );
+        assert_eq!(
+            parse(&["--action", "reconnect", "--target", "abc"]),
+            Request::Action("reconnect".into(), Some("abc".into()))
+        );
+        // An action without its name is a plain launch.
+        assert_eq!(parse(&["--action"]), Request::Window);
+    }
 }
