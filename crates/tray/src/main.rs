@@ -25,8 +25,6 @@ use nuage_tray::{NuageTray, TrayAction, agent, daemon};
 
 /// Minimum delay between two restarts of a crashed daemon.
 const RESTART_INTERVAL: Duration = Duration::from_secs(60);
-/// How long to wait for a previous agent to end (a restart after an update).
-const CLAIM_WAIT: Duration = Duration::from_secs(10);
 /// Where translations are installed (overridable for development).
 const DEFAULT_LOCALE_DIR: &str = "/app/share/locale";
 /// Notification of the update of Nuage, one at a time.
@@ -52,7 +50,7 @@ fn main() -> ExitCode {
     let _ = gettextrs::bind_textdomain_codeset("nuage", "UTF-8");
     let _ = gettextrs::textdomain("nuage");
 
-    let _instance = match agent::claim(CLAIM_WAIT) {
+    let _instance = match agent::claim() {
         Ok(Some(instance)) => instance,
         Ok(None) => {
             tracing::info!("the Nuage tray agent already runs");
