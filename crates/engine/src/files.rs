@@ -132,8 +132,7 @@ fn entry_from(item: &ListItem, target: &Target) -> Entry {
     let modified = item
         .mod_time
         .as_deref()
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| t.with_timezone(&chrono::Utc));
+        .and_then(|t| t.parse::<jiff::Timestamp>().ok());
     let native_doc = (!item.is_dir)
         .then(|| {
             target
@@ -187,7 +186,7 @@ fn list_cached(hidden: &Path, cache: &Path, path: &str) -> std::io::Result<Vec<E
                 EntryKind::File
             },
             size: (!meta.is_dir()).then_some(meta.len()),
-            modified: meta.modified().ok().map(chrono::DateTime::from),
+            modified: meta.modified().ok().and_then(|t| t.try_into().ok()),
             mime: None,
             hash: None,
             native_doc: None,
@@ -402,7 +401,7 @@ impl Inner {
                         EntryKind::File
                     },
                     size: (!meta.is_dir()).then_some(meta.len()),
-                    modified: meta.modified().ok().map(chrono::DateTime::from),
+                    modified: meta.modified().ok().and_then(|t| t.try_into().ok()),
                     mime: None,
                     hash: None,
                     badges: vec![Badge::KeptOffline],
@@ -443,7 +442,7 @@ impl Inner {
                     EntryKind::File
                 },
                 size: (!item.dir).then_some(item.size),
-                modified: chrono::DateTime::from_timestamp(item.mtime, 0),
+                modified: jiff::Timestamp::from_second(item.mtime).ok(),
                 mime: None,
                 hash: None,
                 badges,

@@ -79,7 +79,7 @@ impl Inner {
             }
             record.exclusions.push(StoredExclusion {
                 rule: rule.clone(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             });
             Ok(())
         })
@@ -202,7 +202,7 @@ impl Inner {
                 out.extend(DEFAULT_PATTERNS.iter().map(|p| Exclusion {
                     account: id.clone(),
                     rule: ExclusionRule::Glob((*p).to_owned()),
-                    created_at: chrono::DateTime::UNIX_EPOCH,
+                    created_at: jiff::Timestamp::UNIX_EPOCH,
                     default: true,
                 }));
             }

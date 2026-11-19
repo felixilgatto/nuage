@@ -227,8 +227,8 @@ async fn ls(cli: &Cli, path: &RemotePath) -> Result<(), Failure> {
         let date = e
             .modified
             .map(|d| {
-                d.with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M")
+                d.to_zoned_datetime(jiff::tz::TimeZone::system())
+                    .strftime("%Y-%m-%d %H:%M")
                     .to_string()
             })
             .unwrap_or_default();

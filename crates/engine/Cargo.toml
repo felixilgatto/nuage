@@ -17,7 +17,7 @@ default = ["default-providers"]
 default-providers = ["nuage-providers/default"]
 
 [dependencies]
-chrono.workspace = true
+jiff.workspace = true
 nuage-core.workspace = true
 nuage-fs.workspace = true
 nuage-providers.workspace = true

@@ -59,7 +59,7 @@ pub(crate) struct PinRow {
     pub account: AccountId,
     pub path: String,
     pub kind: PinKind,
-    pub pinned_at: chrono::DateTime<chrono::Utc>,
+    pub pinned_at: jiff::Timestamp,
 }
 
 fn db_error(e: rusqlite::Error) -> Error {
@@ -149,9 +149,7 @@ impl PinDb {
                     } else {
                         PinKind::File
                     },
-                    pinned_at: chrono::DateTime::parse_from_rfc3339(&at)
-                        .map(|t| t.with_timezone(&chrono::Utc))
-                        .unwrap_or_default(),
+                    pinned_at: at.parse().unwrap_or_default(),
                 })
             })
             .map_err(db_error)?;
@@ -166,7 +164,7 @@ impl PinDb {
                     account.as_str(),
                     path,
                     kind_text(kind),
-                    chrono::Utc::now().to_rfc3339()
+                    jiff::Timestamp::now().to_string()
                 ],
             )
             .map(drop)
@@ -378,6 +376,19 @@ mod tests {
         assert_eq!(db.listings(&a).unwrap()[""], items);
         db.remove_account(&a).unwrap();
         assert!(db.pins(Some(&a)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reads_dates_saved_by_older_versions() {
+        let db = PinDb::in_memory().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO pins (account, path, kind, pinned_at) VALUES ('a', 'x', 'file', ?1)",
+                params!["2026-11-05T10:20:30.123456789+00:00"],
+            )
+            .unwrap();
+        let pins = db.pins(None).unwrap();
+        assert_eq!(pins[0].pinned_at.as_second(), 1_793_874_030);
     }
 
     #[test]

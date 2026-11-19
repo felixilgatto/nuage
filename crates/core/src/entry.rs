@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// A file or folder on a remote.
@@ -10,7 +10,7 @@ pub struct Entry {
     pub kind: EntryKind,
     /// Size in bytes; `None` for folders or when unknown.
     pub size: Option<u64>,
-    pub modified: Option<DateTime<Utc>>,
+    pub modified: Option<Timestamp>,
     pub mime: Option<String>,
     /// A content hash, when the backend provides one (`"<algo>:<hex>"`).
     pub hash: Option<String>,

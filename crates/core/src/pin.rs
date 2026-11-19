@@ -1,6 +1,6 @@
 //! Offline pinning (v1.1): files and folders kept on this computer.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::AccountId;
@@ -11,7 +11,7 @@ pub struct Pin {
     pub account: AccountId,
     pub path: String,
     pub kind: PinKind,
-    pub pinned_at: DateTime<Utc>,
+    pub pinned_at: Timestamp,
     #[serde(default)]
     pub state: PinState,
     /// Bytes kept on this computer.
