@@ -129,6 +129,9 @@ jobs:
           git diff --exit-code build-aux/flatpak/cargo-sources.json \
             || { echo "::error::Regenerate it: scripts/cargo-sources.py"; exit 1; }
 
+      - name: Make the preinstalled runtimes updatable
+        run: scripts/ci-flatpak-writable.sh
+
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: nuage.flatpak
