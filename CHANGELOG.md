@@ -4,6 +4,8 @@ Notable changes of Nuage. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-19
+
 - The OneDrive Personal Vault no longer fills the log with an error at
   every listing.
 - Nuage takes about 65 MB less memory when its window is closed: the

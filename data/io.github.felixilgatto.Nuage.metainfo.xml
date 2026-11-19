@@ -89,6 +89,15 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.4" date="2026-11-19">
+      <description>
+        <ul>
+          <li>The OneDrive Personal Vault no longer fills the log with an error at every listing.</li>
+          <li>Nuage takes about 65 MB less memory when its window is closed: the tray icon and the notifications now run in a small program of their own.</li>
+          <li>After an update, opening Nuage offers to restart it to use the new version.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.3" date="2026-11-11">
       <description>
         <ul>
