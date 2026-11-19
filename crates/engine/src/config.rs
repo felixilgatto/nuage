@@ -101,7 +101,7 @@ pub struct AccountRecord {
 pub struct StoredExclusion {
     #[serde(flatten)]
     pub rule: StoredRule,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,7 +207,7 @@ mod tests {
                 default_exclusions: false,
                 exclusions: vec![StoredExclusion {
                     rule: StoredRule::Glob("*.log".into()),
-                    created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    created_at: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
                 }],
                 cache_max_age_secs: Some(3600),
             }],
@@ -217,5 +217,14 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn reads_dates_saved_by_older_versions() {
+        let saved: StoredExclusion = toml::from_str(
+            "type = \"glob\"\nvalue = \"*.log\"\ncreated_at = \"2023-11-14T22:13:20.5Z\"\n",
+        )
+        .unwrap();
+        assert_eq!(saved.created_at.as_second(), 1_700_000_000);
     }
 }

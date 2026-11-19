@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::{AccountId, RemotePath};
@@ -8,7 +8,7 @@ use crate::{AccountId, RemotePath};
 pub struct Exclusion {
     pub account: AccountId,
     pub rule: ExclusionRule,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     /// One of the default patterns ([`DEFAULT_PATTERNS`]), which can be
     /// turned off per account.
     #[serde(default)]

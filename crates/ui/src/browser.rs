@@ -163,7 +163,7 @@ fn dimmed(entry: &Entry) -> bool {
 fn modified_text(entry: &Entry) -> String {
     entry
         .modified
-        .and_then(|t| glib::DateTime::from_unix_utc(t.timestamp()).ok())
+        .and_then(|t| glib::DateTime::from_unix_utc(t.as_second()).ok())
         .and_then(|t| t.to_local().ok())
         .and_then(|t| t.format("%x %H:%M").ok())
         .map(|s| s.to_string())

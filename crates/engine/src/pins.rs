@@ -142,9 +142,9 @@ fn ancestors(path: &str) -> Vec<String> {
 }
 
 /// `docs/report.odt` → `docs/report (conflict 2026-10-29 18-45).odt`.
-fn conflict_name(path: &str, at: chrono::DateTime<chrono::Local>) -> String {
+fn conflict_name(path: &str, at: &jiff::ZonedDateTime) -> String {
     let (dir, name) = path.rsplit_once('/').map_or(("", path), |(d, n)| (d, n));
-    let stamp = at.format("%Y-%m-%d %H-%M");
+    let stamp = at.strftime("%Y-%m-%d %H-%M");
     let name = match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => format!("{stem} (conflict {stamp}).{ext}"),
         _ => format!("{name} (conflict {stamp})"),
@@ -360,8 +360,8 @@ impl Inner {
                 mtime: i
                     .mod_time
                     .as_deref()
-                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                    .map_or(0, |t| t.timestamp()),
+                    .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+                    .map_or(0, |t| t.as_second()),
             })
             .collect();
         if let Err(e) = self.pins.db.save_listing(account, dir, &saved) {
@@ -1085,7 +1085,7 @@ impl Inner {
         sig: Option<RemoteSig>,
     ) -> std::result::Result<(), String> {
         let id = &ctx.account.id;
-        let renamed = conflict_name(path, chrono::Local::now());
+        let renamed = conflict_name(path, &jiff::ZonedDateTime::now());
         std::fs::rename(ctx.store.join(path), ctx.store.join(&renamed))
             .map_err(|e| e.to_string())?;
         tracing::warn!(%path, kept = %renamed, "conflict: both versions kept");
@@ -1159,16 +1159,17 @@ mod tests {
 
     #[test]
     fn names_and_paths() {
-        let at = chrono::DateTime::parse_from_rfc3339("2026-10-29T18:45:00+01:00")
+        let at = "2026-10-29T18:45:00+01:00"
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .with_timezone(&chrono::Local);
-        let stamp = at.format("%Y-%m-%d %H-%M").to_string();
+            .to_zoned_datetime(jiff::tz::TimeZone::system());
+        let stamp = at.strftime("%Y-%m-%d %H-%M").to_string();
         assert_eq!(
-            conflict_name("docs/report.docx", at),
+            conflict_name("docs/report.docx", &at),
             format!("docs/report (conflict {stamp}).docx")
         );
         assert_eq!(
-            conflict_name("notes", at),
+            conflict_name("notes", &at),
             format!("notes (conflict {stamp})")
         );
         assert_eq!(ancestors("a/b/c.txt"), ["", "a", "a/b"]);
